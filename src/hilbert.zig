@@ -31,6 +31,10 @@ const HistogramSummary = struct {
     entry_count: usize,
 };
 
+fn writePercentageHundredths(writer: anytype, hundredths: u32) !void {
+    try writer.print("{d}.{d:0>2}%", .{ @divFloor(hundredths, 100), hundredths % 100 });
+}
+
 fn percentageHundredths(count: u32, total_count: u32) u32 {
     std.debug.assert(total_count != 0);
 
@@ -40,25 +44,16 @@ fn percentageHundredths(count: u32, total_count: u32) u32 {
 }
 
 fn writePercentage(writer: anytype, count: u32, total_count: u32) !void {
-    const hundredths = percentageHundredths(count, total_count);
-    try writer.print("{d}.{d:0>2}%", .{ @divFloor(hundredths, 100), hundredths % 100 });
+    try writePercentageHundredths(writer, percentageHundredths(count, total_count));
 }
 
-fn reachesCoverageThreshold(cumulative_count: u32, total_count: u32, coverage_percent: u8) bool {
-    std.debug.assert(total_count != 0);
-
-    return @as(u64, cumulative_count) * 100 >= @as(u64, total_count) * coverage_percent;
+fn percentageHundredthsOrZero(count: u32, total_count: u32) u32 {
+    return if (total_count == 0) 0 else percentageHundredths(count, total_count);
 }
 
 fn validateOrder(order: u8) !void {
     if (order > max_order) {
         return error.InvalidOrder;
-    }
-}
-
-fn validateCoveragePercent(coverage_percent: u8) !void {
-    if (coverage_percent > 100) {
-        return error.InvalidCoverage;
     }
 }
 
@@ -243,6 +238,12 @@ fn buildNeighborDistanceHistogram(order: u8, entries: *[histogram_bins]Histogram
     };
 }
 
+fn writeNeighborDistanceHistogramEntry(writer: anytype, entry: HistogramEntry, total_count: u32) !void {
+    try writer.print("distance={d} count={d} percentage=", .{ entry.distance, entry.count });
+    try writePercentage(writer, entry.count, total_count);
+    try writer.writeByte('\n');
+}
+
 pub fn d2xy(order: u8, d: u16) !Point {
     try validateOrder(order);
     try validateIndex(order, d);
@@ -298,34 +299,35 @@ pub fn writeNeighborDistances(writer: anytype, order: u8) !void {
 }
 
 pub fn writeNeighborDistanceHistogram(writer: anytype, order: u8) !void {
-    return writeNeighborDistanceHistogramCoverage(writer, order, 100);
-}
-
-pub fn writeNeighborDistanceHistogramCoverage(writer: anytype, order: u8, coverage_percent: u8) !void {
     try validateOrder(order);
-    try validateCoveragePercent(coverage_percent);
-
-    if (coverage_percent == 0) {
-        return;
-    }
 
     var entries: [histogram_bins]HistogramEntry = undefined;
     const summary = try buildNeighborDistanceHistogram(order, &entries);
-    if (summary.total_count == 0) {
-        return;
-    }
 
-    var cumulative_count: u32 = 0;
     for (entries[0..summary.entry_count]) |entry| {
-        try writer.print("distance={d} count={d} percentage=", .{ entry.distance, entry.count });
-        try writePercentage(writer, entry.count, summary.total_count);
-        try writer.writeByte('\n');
+        try writeNeighborDistanceHistogramEntry(writer, entry, summary.total_count);
+    }
+}
 
-        cumulative_count += entry.count;
-        if (reachesCoverageThreshold(cumulative_count, summary.total_count, coverage_percent)) {
+pub fn writeNeighborDistanceHistogramMaxDistance(writer: anytype, order: u8, max_distance: u16) !void {
+    try validateOrder(order);
+
+    var entries: [histogram_bins]HistogramEntry = undefined;
+    const summary = try buildNeighborDistanceHistogram(order, &entries);
+
+    var subtotal_count: u32 = 0;
+    for (entries[0..summary.entry_count]) |entry| {
+        if (entry.distance > max_distance) {
             break;
         }
+
+        try writeNeighborDistanceHistogramEntry(writer, entry, summary.total_count);
+        subtotal_count += entry.count;
     }
+
+    try writer.writeAll("cumulative_percentage=");
+    try writePercentageHundredths(writer, percentageHundredthsOrZero(subtotal_count, summary.total_count));
+    try writer.writeByte('\n');
 }
 
 test "order 2 mapping matches the document table" {
@@ -529,35 +531,38 @@ test "writeNeighborDistanceHistogram emits expected order 2 report" {
     try std.testing.expectEqualStrings(expected, stream.getWritten());
 }
 
-test "writeNeighborDistanceHistogramCoverage emits empty output for zero coverage" {
+test "writeNeighborDistanceHistogramMaxDistance emits zero cutoff summary" {
     var buffer: [64]u8 = undefined;
     var stream = std.io.fixedBufferStream(&buffer);
 
-    try writeNeighborDistanceHistogramCoverage(stream.writer(), 1, 0);
+    try writeNeighborDistanceHistogramMaxDistance(stream.writer(), 1, 0);
 
-    try std.testing.expectEqualStrings("", stream.getWritten());
+    try std.testing.expectEqualStrings("cumulative_percentage=0.00%\n", stream.getWritten());
 }
 
-test "writeNeighborDistanceHistogramCoverage emits expected order 1 report for partial coverage" {
-    var buffer: [128]u8 = undefined;
+test "writeNeighborDistanceHistogramMaxDistance emits expected order 2 report" {
+    var buffer: [256]u8 = undefined;
     var stream = std.io.fixedBufferStream(&buffer);
 
-    try writeNeighborDistanceHistogramCoverage(stream.writer(), 1, 80);
+    try writeNeighborDistanceHistogramMaxDistance(stream.writer(), 2, 4);
 
     const expected =
-        \\distance=1 count=6 percentage=50.00%
-        \\distance=2 count=4 percentage=33.33%
+        \\distance=1 count=30 percentage=35.71%
+        \\distance=2 count=24 percentage=28.57%
+        \\distance=3 count=10 percentage=11.90%
+        \\distance=4 count=4 percentage=4.76%
+        \\cumulative_percentage=80.95%
         \\
     ;
 
     try std.testing.expectEqualStrings(expected, stream.getWritten());
 }
 
-test "writeNeighborDistanceHistogramCoverage emits expected order 2 report for partial coverage" {
+test "writeNeighborDistanceHistogramMaxDistance emits full order 2 report for oversized cutoff" {
     var buffer: [512]u8 = undefined;
     var stream = std.io.fixedBufferStream(&buffer);
 
-    try writeNeighborDistanceHistogramCoverage(stream.writer(), 2, 93);
+    try writeNeighborDistanceHistogramMaxDistance(stream.writer(), 2, std.math.maxInt(u16));
 
     const expected =
         \\distance=1 count=30 percentage=35.71%
@@ -568,17 +573,12 @@ test "writeNeighborDistanceHistogramCoverage emits expected order 2 report for p
         \\distance=6 count=4 percentage=4.76%
         \\distance=11 count=2 percentage=2.38%
         \\distance=12 count=4 percentage=4.76%
+        \\distance=13 count=2 percentage=2.38%
+        \\cumulative_percentage=100.00%
         \\
     ;
 
     try std.testing.expectEqualStrings(expected, stream.getWritten());
-}
-
-test "writeNeighborDistanceHistogramCoverage rejects invalid coverage" {
-    var buffer: [64]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
-
-    try std.testing.expectError(error.InvalidCoverage, writeNeighborDistanceHistogramCoverage(stream.writer(), 1, 101));
 }
 
 test "writePercentage rounds and zero pads to hundredths" {

@@ -107,7 +107,7 @@ The implementation also exposes:
 
 ```zig
 pub fn writeNeighborDistanceHistogram(writer: anytype, order: u8) !void
-pub fn writeNeighborDistanceHistogramCoverage(writer: anytype, order: u8, coverage_percent: u8) !void
+pub fn writeNeighborDistanceHistogramMaxDistance(writer: anytype, order: u8, max_distance: u16) !void
 ```
 
 This mode computes the frequency of every distance that appears among valid Moore-neighbor relationships in the report.
@@ -138,34 +138,37 @@ The percentage is rounded to the nearest hundredth. Because of rounding, the pri
 
 Internally the implementation accumulates counts in a fixed array indexed by distance, sums the total valid directed neighbor relationships, then emits the non-zero buckets in ascending distance order.
 
-### Coverage Filter
+### Max-Distance Filter
 
-Histogram mode also supports an optional coverage filter:
+Histogram mode also supports an optional distance cutoff:
 
 ```text
-zig build run -- neighbors histogram <order> coverage <percent>
+zig build run -- neighbors histogram <order> max-distance <distance>
 ```
 
 Behavior:
 
-- `percent` is an integer in `0..100`
-- buckets are considered in ascending distance order
-- output includes the smallest prefix whose cumulative `count` reaches at least the requested coverage percent
-- the bucket that crosses the threshold is included
-- `coverage 0` emits no lines
-- `coverage 100` emits the full histogram
+- `distance` is parsed as `u16`
+- only rows with `distance <= max_distance` are emitted
+- the cutoff is inclusive
+- the filtered form always appends one summary row:
 
-Example for order `2` with `coverage 93`:
+```text
+cumulative_percentage=<value>%
+```
+
+- the summary percentage is computed from the exact subtotal count for displayed rows, not by summing already-rounded row percentages
+- `max-distance 0` emits no distance rows and `cumulative_percentage=0.00%`
+- a cutoff above the largest present distance emits the full histogram plus `cumulative_percentage=100.00%`
+
+Example for order `2` with `max-distance 4`:
 
 ```text
 distance=1 count=30 percentage=35.71%
 distance=2 count=24 percentage=28.57%
 distance=3 count=10 percentage=11.90%
 distance=4 count=4 percentage=4.76%
-distance=5 count=4 percentage=4.76%
-distance=6 count=4 percentage=4.76%
-distance=11 count=2 percentage=2.38%
-distance=12 count=4 percentage=4.76%
+cumulative_percentage=80.95%
 ```
 
 ## Output Format
@@ -201,7 +204,7 @@ zig build run -- <order>
 zig build run -- curve <order>
 zig build run -- neighbors <order>
 zig build run -- neighbors histogram <order>
-zig build run -- neighbors histogram <order> coverage <percent>
+zig build run -- neighbors histogram <order> max-distance <distance>
 ```
 
 Mode behavior:
@@ -210,7 +213,7 @@ Mode behavior:
 - `curve <order>` is an explicit alias for the original mode
 - `neighbors <order>` emits the Moore-neighbor distance report
 - `neighbors histogram <order>` emits the histogram of neighbor distances
-- `neighbors histogram <order> coverage <percent>` emits only the smallest ascending-distance prefix needed to reach the requested cumulative coverage
+- `neighbors histogram <order> max-distance <distance>` emits only distances `1..max_distance` and a final cumulative percentage row
 
 Argument parsing is handled in `src/main.zig` by `parseCommand`, which selects either curve output or neighbor-distance output before dispatching to the appropriate writer.
 
@@ -223,7 +226,7 @@ Neighbor-report-specific coverage includes:
 - exact golden output for order `0`
 - exact golden output for order `1`
 - exact histogram output for orders `0` and `1`
-- exact histogram coverage output for order `1`
+- exact histogram max-distance output for order `2`
 - percentage formatting and rounding behavior
 - exhaustive neighbor validation for every point in orders `0..8`
 - histogram total-count validation for every point in orders `0..8`
@@ -232,7 +235,7 @@ Neighbor-report-specific coverage includes:
   - `curve <order>`
   - `neighbors <order>`
   - `neighbors histogram <order>`
-  - `neighbors histogram <order> coverage <percent>`
+  - `neighbors histogram <order> max-distance <distance>`
   - invalid argument shapes
 
 Run all tests with:

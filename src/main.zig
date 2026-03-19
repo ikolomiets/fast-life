@@ -10,7 +10,7 @@ const Mode = enum {
 const Command = struct {
     mode: Mode,
     order: u8,
-    coverage_percent: ?u8 = null,
+    max_distance: ?u16 = null,
 };
 
 fn printUsage(writer: *std.Io.Writer, exe_name: []const u8) !void {
@@ -18,7 +18,7 @@ fn printUsage(writer: *std.Io.Writer, exe_name: []const u8) !void {
     try writer.print("       {s} curve <order>\n", .{exe_name});
     try writer.print("       {s} neighbors <order>\n", .{exe_name});
     try writer.print("       {s} neighbors histogram <order>\n", .{exe_name});
-    try writer.print("       {s} neighbors histogram <order> coverage <percent>\n", .{exe_name});
+    try writer.print("       {s} neighbors histogram <order> max-distance <distance>\n", .{exe_name});
     try writer.writeAll("Generate Hilbert curve points, Moore-neighbor distances, or a neighbor-distance histogram for order 0 through 8.\n");
 }
 
@@ -31,13 +31,8 @@ fn parseOrder(arg: []const u8) !u8 {
     return std.fmt.parseInt(u8, arg, 10) catch error.InvalidUsage;
 }
 
-fn parseCoveragePercent(arg: []const u8) !u8 {
-    const coverage_percent = std.fmt.parseInt(u8, arg, 10) catch return error.InvalidUsage;
-    if (coverage_percent > 100) {
-        return error.InvalidUsage;
-    }
-
-    return coverage_percent;
+fn parseMaxDistance(arg: []const u8) !u16 {
+    return std.fmt.parseInt(u16, arg, 10) catch error.InvalidUsage;
 }
 
 fn parseCommand(args: []const []const u8) !Command {
@@ -45,7 +40,7 @@ fn parseCommand(args: []const []const u8) !Command {
         1 => .{
             .mode = .curve,
             .order = try parseOrder(args[0]),
-            .coverage_percent = null,
+            .max_distance = null,
         },
         2 => .{
             .mode = if (std.mem.eql(u8, args[0], "curve"))
@@ -55,7 +50,7 @@ fn parseCommand(args: []const []const u8) !Command {
             else
                 return error.InvalidUsage,
             .order = try parseOrder(args[1]),
-            .coverage_percent = null,
+            .max_distance = null,
         },
         3 => .{
             .mode = if (std.mem.eql(u8, args[0], "neighbors") and std.mem.eql(u8, args[1], "histogram"))
@@ -63,17 +58,17 @@ fn parseCommand(args: []const []const u8) !Command {
             else
                 return error.InvalidUsage,
             .order = try parseOrder(args[2]),
-            .coverage_percent = null,
+            .max_distance = null,
         },
         5 => .{
             .mode = if (std.mem.eql(u8, args[0], "neighbors") and
                 std.mem.eql(u8, args[1], "histogram") and
-                std.mem.eql(u8, args[3], "coverage"))
+                std.mem.eql(u8, args[3], "max-distance"))
                 .neighbors_histogram
             else
                 return error.InvalidUsage,
             .order = try parseOrder(args[2]),
-            .coverage_percent = try parseCoveragePercent(args[4]),
+            .max_distance = try parseMaxDistance(args[4]),
         },
         else => error.InvalidUsage,
     };
@@ -83,8 +78,8 @@ fn writeCommand(writer: *std.Io.Writer, command: Command) !void {
     return switch (command.mode) {
         .curve => hilbert.writeCurve(writer, command.order),
         .neighbors => hilbert.writeNeighborDistances(writer, command.order),
-        .neighbors_histogram => if (command.coverage_percent) |coverage_percent|
-            hilbert.writeNeighborDistanceHistogramCoverage(writer, command.order, coverage_percent)
+        .neighbors_histogram => if (command.max_distance) |max_distance|
+            hilbert.writeNeighborDistanceHistogramMaxDistance(writer, command.order, max_distance)
         else
             hilbert.writeNeighborDistanceHistogram(writer, command.order),
     };
@@ -121,10 +116,6 @@ pub fn main() !void {
             try printUsageAndFlush(stderr_w, exe_name);
             return err;
         },
-        error.InvalidCoverage => {
-            try printUsageAndFlush(stderr_w, exe_name);
-            return err;
-        },
         else => return err,
     };
 
@@ -142,20 +133,20 @@ test "parseCommand accepts explicit modes" {
     const curve_command = try parseCommand(&.{ "curve", "3" });
     const neighbor_command = try parseCommand(&.{ "neighbors", "4" });
     const histogram_command = try parseCommand(&.{ "neighbors", "histogram", "5" });
-    const coverage_command = try parseCommand(&.{ "neighbors", "histogram", "5", "coverage", "80" });
+    const max_distance_command = try parseCommand(&.{ "neighbors", "histogram", "5", "max-distance", "80" });
 
     try std.testing.expectEqual(Mode.curve, curve_command.mode);
     try std.testing.expectEqual(@as(u8, 3), curve_command.order);
-    try std.testing.expectEqual(@as(?u8, null), curve_command.coverage_percent);
+    try std.testing.expectEqual(@as(?u16, null), curve_command.max_distance);
     try std.testing.expectEqual(Mode.neighbors, neighbor_command.mode);
     try std.testing.expectEqual(@as(u8, 4), neighbor_command.order);
-    try std.testing.expectEqual(@as(?u8, null), neighbor_command.coverage_percent);
+    try std.testing.expectEqual(@as(?u16, null), neighbor_command.max_distance);
     try std.testing.expectEqual(Mode.neighbors_histogram, histogram_command.mode);
     try std.testing.expectEqual(@as(u8, 5), histogram_command.order);
-    try std.testing.expectEqual(@as(?u8, null), histogram_command.coverage_percent);
-    try std.testing.expectEqual(Mode.neighbors_histogram, coverage_command.mode);
-    try std.testing.expectEqual(@as(u8, 5), coverage_command.order);
-    try std.testing.expectEqual(@as(?u8, 80), coverage_command.coverage_percent);
+    try std.testing.expectEqual(@as(?u16, null), histogram_command.max_distance);
+    try std.testing.expectEqual(Mode.neighbors_histogram, max_distance_command.mode);
+    try std.testing.expectEqual(@as(u8, 5), max_distance_command.order);
+    try std.testing.expectEqual(@as(?u16, 80), max_distance_command.max_distance);
 }
 
 test "parseCommand rejects invalid arg shapes" {
@@ -164,7 +155,7 @@ test "parseCommand rejects invalid arg shapes" {
     try std.testing.expectError(error.InvalidUsage, parseCommand(&.{ "unknown", "2" }));
     try std.testing.expectError(error.InvalidUsage, parseCommand(&.{ "neighbors", "unknown", "2" }));
     try std.testing.expectError(error.InvalidUsage, parseCommand(&.{ "1", "2", "3" }));
-    try std.testing.expectError(error.InvalidUsage, parseCommand(&.{ "neighbors", "histogram", "5", "coverage" }));
-    try std.testing.expectError(error.InvalidUsage, parseCommand(&.{ "neighbors", "histogram", "5", "coverage", "101" }));
-    try std.testing.expectError(error.InvalidUsage, parseCommand(&.{ "neighbors", "histogram", "coverage", "5", "80" }));
+    try std.testing.expectError(error.InvalidUsage, parseCommand(&.{ "neighbors", "histogram", "5", "max-distance" }));
+    try std.testing.expectError(error.InvalidUsage, parseCommand(&.{ "neighbors", "histogram", "5", "max-distance", "70000" }));
+    try std.testing.expectError(error.InvalidUsage, parseCommand(&.{ "neighbors", "histogram", "max-distance", "5", "80" }));
 }

@@ -180,7 +180,7 @@ The library also exposes:
 ```zig
 pub fn writeNeighborDistances(writer: anytype, order: u8) !void
 pub fn writeNeighborDistanceHistogram(writer: anytype, order: u8) !void
-pub fn writeNeighborDistanceHistogramCoverage(writer: anytype, order: u8, coverage_percent: u8) !void
+pub fn writeNeighborDistanceHistogramMaxDistance(writer: anytype, order: u8, max_distance: u16) !void
 ```
 
 This report walks the Hilbert curve in index order and prints one line per cell with:
@@ -191,7 +191,7 @@ This report walks the Hilbert curve in index order and prints one line per cell 
 
 Each distance is the absolute difference between the current cell index and the neighbor cell index along the Hilbert curve. Missing neighbors print `-`.
 
-The histogram writer aggregates those same neighbor-distance values across the full report and prints one `distance=<value> count=<value> percentage=<value>%` line per distinct distance, sorted by ascending distance. The percentage is the bucket's share of all valid directed neighbor relationships in the grid, rounded to the nearest hundredth. The coverage variant prints only the shortest leading prefix of those sorted rows whose cumulative count reaches the requested integer percentage in `0..100`.
+The histogram writer aggregates those same neighbor-distance values across the full report and prints one `distance=<value> count=<value> percentage=<value>%` line per distinct distance, sorted by ascending distance. The percentage is the bucket's share of all valid directed neighbor relationships in the grid, rounded to the nearest hundredth. The max-distance variant prints only rows with `distance <= max_distance`, then appends `cumulative_percentage=<value>%` computed from the exact subtotal count of the printed rows.
 
 Example output line:
 
@@ -210,7 +210,7 @@ zig build run -- 2
 zig build run -- curve 2
 zig build run -- neighbors 2
 zig build run -- neighbors histogram 2
-zig build run -- neighbors histogram 2 coverage 80
+zig build run -- neighbors histogram 2 max-distance 4
 ```
 
 Behavior:
@@ -219,7 +219,7 @@ Behavior:
 - `zig build run -- curve <order>` does the same explicitly
 - `zig build run -- neighbors <order>` prints Moore-neighbor distances
 - `zig build run -- neighbors histogram <order>` prints the histogram of neighbor distances
-- `zig build run -- neighbors histogram <order> coverage <percent>` prints the shortest ascending-distance histogram prefix that reaches the requested cumulative coverage
+- `zig build run -- neighbors histogram <order> max-distance <distance>` prints only distances `1..max_distance` and a final cumulative percentage row
 - prints usage to stderr on missing, malformed, or extra arguments
 - prints usage again when `order > 8`
 - writes the selected report to stdout
@@ -246,7 +246,7 @@ The suite covers:
 - exhaustive round-trips for every valid point in orders `0..8`
 - exact neighbor-distance output for orders `0` and `1`
 - exact histogram output for orders `0` and `1`
-- exact histogram coverage output for order `1`
+- exact histogram max-distance output for order `2`
 - percentage formatting and rounding behavior
 - Moore-neighbor distance checks for every point in orders `0..8`
 - histogram total-count validation for every point in orders `0..8`
