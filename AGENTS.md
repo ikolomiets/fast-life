@@ -2,11 +2,13 @@
 
 ## Project Structure & Module Organization
 
-This repository is centered on a small Zig implementation of the Hilbert curve algorithm plus its design note. The main files are:
+This repository is centered on a small Zig implementation of the Hilbert curve algorithm plus a combined algorithm and implementation note. The main files are:
 
-- `hilbert_curve_rot_d2xy_xy2d_algorithm.md` for the algorithm explanation
+- `hilbert_curve_implementation.md` for the algorithm explanation and Zig implementation details
 - `build.zig` for build, run, and test entry points
-- `src/hilbert.zig` for the reusable library API and inline unit tests
+- `src/root.zig` for the canonical package root that re-exports project modules
+- `src/modules/hilbert_curve.zig` for the core Hilbert mapping module and its inline tests
+- `src/modules/hilbert_neighbors.zig` for neighbor-distance analysis and its inline tests
 - `src/main.zig` for the CLI curve generator
 
 Keep new Zig modules under `src/`. Use lowercase snake case for new files, for example `curve_examples.zig`.
@@ -15,7 +17,7 @@ Keep new Zig modules under `src/`. Use lowercase snake case for new files, for e
 
 Use Zig’s standard build commands:
 
-- `zig build test` to run the inline unit tests in `src/hilbert.zig`
+- `zig build test` to run the inline unit tests in the module files and CLI entry point
 - `zig build run -- 2` to print the full order-2 Hilbert traversal as `d x y`
 - `zig build` to compile the `hilbert_curve` executable into `zig-out/`
 
@@ -23,7 +25,7 @@ Use `rg "TODO|FIXME" .` before submitting changes if you add follow-up notes.
 
 ## Coding Style & Naming Conventions
 
-Use Zig with small, explicit helpers and straightforward integer math. Keep the algorithm iterative and close to the reference document. For documentation, use short sections and fenced code blocks for pseudocode or shell examples.
+Use Zig with small, explicit helpers and straightforward integer math. Keep the algorithm iterative and close to the reference material in `hilbert_curve_implementation.md`. For documentation, use short sections and fenced code blocks for pseudocode or shell examples.
 
 For filenames:
 
@@ -31,11 +33,11 @@ For filenames:
 - separate words with underscores
 - keep names descriptive and topic-specific
 
-Keep identifiers consistent with the algorithm note, such as `rot`, `d2xy`, `xy2d`, `rx`, and `ry`.
+Keep identifiers consistent with the implementation note, such as `rot`, `d2xy`, `xy2d`, `rx`, and `ry`.
 
 ## Testing Guidelines
 
-Tests live inline in `src/hilbert.zig` using Zig’s built-in test runner. Cover:
+Tests live inline in `src/modules/hilbert_curve.zig`, `src/modules/hilbert_neighbors.zig`, `src/root.zig`, and `src/main.zig` using Zig’s built-in test runner. Cover:
 
 - exact known mappings, especially the order-2 table
 - round-trip behavior for `d2xy` and `xy2d`

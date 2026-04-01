@@ -1,22 +1,262 @@
-# Hilbert Curve Zig Implementation
+# Hilbert Curve Algorithm And Zig Implementation
 
 ## Overview
 
-This repository implements the classic iterative Hilbert curve algorithm described in [`hilbert_curve_rot_d2xy_xy2d_algorithm.md`](./hilbert_curve_rot_d2xy_xy2d_algorithm.md) in Zig. The Zig code lives in:
+This repository implements the classic iterative 2-dimensional Hilbert curve mapping in Zig. The core algorithm is built from three pieces:
 
-- `src/hilbert.zig` for the reusable library API and unit tests
+1. `d2xy` converts a Hilbert index `d` into coordinates `(x, y)`
+2. `xy2d` converts coordinates `(x, y)` back into the Hilbert index
+3. `rot` applies the quadrant-specific rotation or reflection needed to keep the curve continuous
+
+The Zig code lives in:
+
+- `src/root.zig` for the canonical `fast_life` package import
+- `src/modules/hilbert_curve.zig` for the core Hilbert mapping API and inline tests
+- `src/modules/hilbert_neighbors.zig` for neighbor-distance analysis and inline tests
 - `src/main.zig` for the command-line entry point
 - `build.zig` for build, run, and test integration
 
-The implementation keeps the original algorithm shape:
+The implementation is iterative, allocation-free, and close to the standard reference algorithm. This document now serves as both the algorithm note and the repository implementation guide.
 
-1. `d2xy` converts a Hilbert index to `(x, y)`
-2. `xy2d` converts `(x, y)` back to the Hilbert index
-3. `rot` performs the orientation correction at each scale
+## Geometry Of A 2D Hilbert Curve
 
-The code is intentionally iterative, branch-light, and allocation-free.
+For a Hilbert curve of order `k`:
 
-## Data Model And Limits
+```text
+grid size n = 2^k
+points      = n^2 = 4^k
+```
+
+Example orders:
+
+| Order | Grid size | Points    |
+| ----- | --------- | --------- |
+| 0     | 1 x 1     | 1         |
+| 1     | 2 x 2     | 4         |
+| 2     | 4 x 4     | 16        |
+| 3     | 8 x 8     | 64        |
+| 8     | 256 x 256 | 65,536    |
+
+The curve visits every cell exactly once, and each step moves to a neighboring cell. Conceptually, the order-`k` curve is built from four order-`k-1` sub-curves:
+
+```text
+Level k
+ ├─ quadrant 0
+ ├─ quadrant 1
+ ├─ quadrant 2
+ └─ quadrant 3
+```
+
+Each quadrant contains the same smaller Hilbert pattern, but with an orientation that depends on where that quadrant appears in the larger traversal. That orientation change is the purpose of `rot`.
+
+## Bit Interpretation Of The Hilbert Index
+
+A Hilbert index stores two bits per recursion level:
+
+```text
+d = b_(2k-1) b_(2k-2) ... b1 b0
+```
+
+Each bit pair identifies a quadrant:
+
+```text
+00 -> quadrant 0
+01 -> quadrant 1
+10 -> quadrant 2
+11 -> quadrant 3
+```
+
+`d2xy` processes the index from the least significant pair upward. At each scale it extracts two quadrant bits:
+
+```text
+rx = bit controlling the x-side of the quadrant
+ry = bit controlling the y-side of the quadrant
+```
+
+Those bits decide both:
+
+- which sub-square contains the point at the current scale
+- how the local coordinate system must be rotated or reflected before the next offset is applied
+
+## Rotation And Reflection
+
+The Hilbert curve only stays continuous if the coordinate system changes orientation in specific quadrants.
+
+### Cases
+
+| rx | ry | action           |
+| -- | -- | ---------------- |
+| 0  | 0  | rotate 90 deg    |
+| 0  | 1  | no rotation      |
+| 1  | 0  | rotate + reflect |
+| 1  | 1  | no rotation      |
+
+In practice the standard rule collapses to:
+
+```text
+if ry == 0:
+    if rx == 1:
+        reflect
+    swap x and y
+```
+
+Pseudocode:
+
+```text
+procedure ROT(size, x, y, rx, ry)
+
+    if ry == 0 then
+        if rx == 1 then
+            x <- size - 1 - x
+            y <- size - 1 - y
+        end if
+
+        swap(x, y)
+    end if
+
+    return (x, y)
+
+end procedure
+```
+
+Parameter meaning:
+
+```text
+size = current quadrant size
+x,y  = coordinates inside the current square
+rx   = x-direction quadrant bit
+ry   = y-direction quadrant bit
+```
+
+## `d2xy`: Hilbert Index To Coordinates
+
+`d2xy` starts at `(0, 0)` and expands the point from the smallest square outward to the full grid.
+
+Generic pseudocode:
+
+```text
+procedure D2XY(n, d)
+
+    x <- 0
+    y <- 0
+
+    t <- d
+    size <- 1
+
+    while size < n do
+
+        rx <- (t div 2) AND 1
+        ry <- (t XOR rx) AND 1
+
+        (x, y) <- ROT(size, x, y, rx, ry)
+
+        x <- x + size * rx
+        y <- y + size * ry
+
+        t <- t div 4
+        size <- size * 2
+
+    end while
+
+    return (x, y)
+
+end procedure
+```
+
+Step-by-step:
+
+1. Extract the current quadrant bits from the low end of `t`
+2. Rotate or reflect the existing local coordinates with `ROT`
+3. Offset into the selected quadrant with `x += size * rx` and `y += size * ry`
+4. Drop the processed bit pair with `t = t div 4`
+5. Double the square size and continue
+
+This takes `O(order)` time and `O(1)` memory.
+
+## `xy2d`: Coordinates To Hilbert Index
+
+`xy2d` performs the inverse mapping by examining the point from the largest scale down to the smallest.
+
+Generic pseudocode:
+
+```text
+procedure XY2D(n, x, y)
+
+    d <- 0
+    size <- n / 2
+
+    while size > 0 do
+
+        if (x AND size) > 0
+            rx <- 1
+        else
+            rx <- 0
+        end if
+
+        if (y AND size) > 0
+            ry <- 1
+        else
+            ry <- 0
+        end if
+
+        d <- d + size * size * ((3 * rx) XOR ry)
+
+        (x, y) <- ROT(size, x, y, rx, ry)
+
+        size <- size / 2
+
+    end while
+
+    return d
+
+end procedure
+```
+
+The quadrant contribution is encoded with `(3 * rx) XOR ry`, which produces the Hilbert ordering:
+
+| rx | ry | index |
+| -- | -- | ----- |
+| 0  | 0  | 0     |
+| 0  | 1  | 1     |
+| 1  | 1  | 2     |
+| 1  | 0  | 3     |
+
+Like `d2xy`, this inverse transform runs in `O(order)` time and `O(1)` memory.
+
+## Worked Example: Order 2
+
+For order `2`, the grid is `4 x 4` and the traversal order is:
+
+```text
+ 0  1 14 15
+ 3  2 13 12
+ 4  7  8 11
+ 5  6  9 10
+```
+
+For `d = 5`, `d2xy` processes two levels:
+
+```text
+level 0:
+rx = 0
+ry = 1
+-> position inside the first quadrant
+
+level 1:
+rx = 1
+ry = 0
+-> move into the next quadrant with rotation
+```
+
+Final result:
+
+```text
+(x, y) = (0, 3)
+```
+
+The repository tests this exact mapping and the full order-2 table.
+
+## Data Model And Repository Limits
 
 The public coordinate type is:
 
@@ -27,25 +267,25 @@ pub const Point = struct {
 };
 ```
 
-The repository limits `order` to `0..8`:
-
-- grid size `n = 2^order`
-- maximum grid is `256 x 256`
-- maximum valid Hilbert index is `65535`
-
-This makes `u16` sufficient for public `x`, `y`, and `d`.
-
-The library also exposes the 8 compass directions as:
+The library also exposes compass directions for neighbor reporting:
 
 ```zig
 pub const Direction = enum { N, NE, E, SE, S, SW, W, NW };
 ```
 
-One internal detail matters: the implementation does not track “total points” as a numeric count. For order `8`, the total would be `65536`, which does not fit in `u16`. Instead, the code tracks the inclusive maximum valid Hilbert index, which is `65535` and does fit in `u16`.
+This repository intentionally limits `order` to `0..8`:
 
-## Validation Helpers
+- grid size `n = 2^order`
+- maximum grid is `256 x 256`
+- maximum valid Hilbert index is `65535`
 
-`src/hilbert.zig` validates inputs before doing any bit manipulation:
+That makes `u16` sufficient for the public `x`, `y`, and `d` values. One implementation detail follows from that limit: the code tracks the inclusive last valid Hilbert index rather than a total point count, because order `8` has `65,536` points, which does not fit in `u16`, while the last valid index `65,535` does.
+
+In the generic algorithm, higher orders work if the integer widths are widened. This repository chooses a tighter public range to keep the API and tests simple.
+
+## Validation And Geometry Helpers
+
+`src/modules/hilbert_curve.zig` validates all public inputs before doing bit manipulation:
 
 - `validateOrder(order)` returns `error.InvalidOrder` when `order > 8`
 - `validateIndex(order, d)` returns `error.IndexOutOfRange` when `d >= 4^order`
@@ -53,25 +293,28 @@ One internal detail matters: the implementation does not track “total points�
 
 These checks keep failure modes explicit and prevent silent wraparound.
 
-## Grid And Count Helpers
-
-Two small helpers derive the geometry:
+Two small helpers derive grid geometry:
 
 ```zig
 fn gridSize(order: u8) u16
 fn maxIndex(order: u8) u16
 ```
 
-`gridSize` computes `1 << order`. `maxIndex` computes the inclusive last valid Hilbert index for the order:
+`gridSize` computes `1 << order`. `maxIndex` computes the inclusive last valid Hilbert index:
 
 - for orders `0..7`, `maxIndex = 4^order - 1`
 - for order `8`, `maxIndex = 65535`
 
-This lets the implementation keep all index math in `u16` without inventing a wider count type just for loop bounds.
+The public mapping functions validate once, then delegate into internal unchecked helpers:
 
-## Rotation Implementation
+- `d2xyUnchecked(n, d)`
+- `xy2dUnchecked(n, point)`
 
-The reference algorithm uses a single `rot(size, x, y, rx, ry)` transformation. The Zig implementation splits it into two internal helpers:
+That keeps boundary checks at the API edge while avoiding repeated validation in internal loops such as full-curve generation.
+
+## Rotation Implementation In Zig
+
+The abstract algorithm uses one `rot(size, x, y, rx, ry)` transform. The Zig code splits that into two private helpers:
 
 - `rotUnsigned(size: u16, x: *u16, y: *u16, rx: u16, ry: u16)`
 - `rotSigned(size: i32, x: *i32, y: *i32, rx: i32, ry: i32)`
@@ -85,18 +328,11 @@ if ry == 0:
     swap x and y
 ```
 
-The split exists because `xy2d` can temporarily produce negative intermediate coordinates during the inverse rotation step. Public inputs and outputs remain non-negative, but using signed temporaries avoids overflow traps during reflection and swap. `d2xy` does not need that concession, so it stays fully unsigned.
+The split exists because `xy2d` can temporarily produce negative intermediate coordinates during the inverse rotation step. Public inputs and outputs remain non-negative, but signed temporaries avoid overflow traps during reflection and swap. `d2xy` does not need that concession, so it stays fully unsigned.
 
-The public transform functions also delegate into private unchecked helpers:
+## Public Mapping APIs
 
-- `d2xyUnchecked(n, d)`
-- `xy2dUnchecked(n, point)`
-
-That keeps validation at the public boundary while allowing internal loops such as curve generation to avoid re-validating each point.
-
-## `d2xy(order, d)`
-
-`d2xy` starts from `(0, 0)` and expands outward from the smallest square:
+The public `d2xy` entry point is:
 
 ```zig
 pub fn d2xy(order: u8, d: u16) !Point
@@ -107,21 +343,11 @@ Implementation flow:
 1. Validate `order` and `d`
 2. Compute `n = 2^order`
 3. Delegate to `d2xyUnchecked(n, d)`
-4. In the unchecked helper, set `x = 0`, `y = 0`, `t = d`, and `size = 1`
-4. While `size < n`:
-   - `rx = (t >> 1) & 1`
-   - `ry = (t ^ rx) & 1`
-   - rotate with `rotUnsigned`
-   - move into the selected quadrant with `x += size * rx` and `y += size * ry`
-   - shift `t >>= 2`
-   - double `size`
-5. Return the final `Point`
+4. Initialize `x = 0`, `y = 0`, `t = d`, and `size = 1`
+5. Loop while `size < n`, extracting `rx` and `ry`, rotating, offsetting, and doubling `size`
+6. Return the final `Point`
 
-This matches the algorithm note directly and runs in `O(order)` time with `O(1)` memory.
-
-## `xy2d(order, point)`
-
-`xy2d` walks from the largest scale down to the smallest:
+The public `xy2d` entry point is:
 
 ```zig
 pub fn xy2d(order: u8, point: Point) !u16
@@ -132,21 +358,16 @@ Implementation flow:
 1. Validate `order` and `point`
 2. Compute `n = 2^order`
 3. Delegate to `xy2dUnchecked(n, point)`
-4. In the unchecked helper, promote `x` and `y` to signed `i32`
-5. Start with `size = n / 2`
-5. While `size > 0`:
-   - detect the current quadrant bits with `(x & size)` and `(y & size)`
-   - compute the quadrant contribution with `(3 * rx) ^ ry`
-   - add `size * size * quadrant` into `d`
-   - rotate with `rotSigned`
-   - halve `size`
-6. Return `d`
+4. Promote `x` and `y` to signed `i32`
+5. Start from `size = n / 2`
+6. Loop while `size > 0`, deriving `rx` and `ry`, adding the quadrant contribution with `(3 * rx) ^ ry`, rotating, and halving `size`
+7. Return `d`
 
-The use of signed temporaries is the main implementation nuance in this file.
+Both mappings stay faithful to the standard iterative algorithm and complete in at most eight iterations in this repository.
 
 ## Curve Writer
 
-The library also exposes:
+The canonical `fast_life.hilbert_neighbors` module also exposes:
 
 ```zig
 pub fn writeCurve(writer: anytype, order: u8) !void
@@ -155,8 +376,8 @@ pub fn writeCurve(writer: anytype, order: u8) !void
 This helper:
 
 - validates `order`
-- iterates over all indices from `0` to `maxIndex(order)`
 - computes `n = 2^order` once
+- iterates over all indices from `0` to `maxIndex(order)`
 - calls `d2xyUnchecked(n, d)` for each index
 - prints one line per point as `d x y`
 
@@ -171,16 +392,18 @@ Example for order `2`:
 15 3 0
 ```
 
-The loop counter is `u16`. The loop terminates by comparing against the inclusive end index instead of an exclusive point count.
+This is the concrete repository form of the generic "generate the whole curve by iterating `d`" pattern.
 
 ## Moore-Neighbor Distance Report
 
 The library also exposes:
 
 ```zig
+pub const NeighborKind = enum { all, orthogonal, diagonal };
 pub fn writeNeighborDistances(writer: anytype, order: u8) !void
 pub fn writeNeighborDistanceHistogram(writer: anytype, order: u8) !void
 pub fn writeNeighborDistanceHistogramMaxDistance(writer: anytype, order: u8, max_distance: u16) !void
+pub fn writeNeighborDistanceHistogramFiltered(writer: anytype, order: u8, kind: NeighborKind, max_distance: ?u16) !void
 ```
 
 This report walks the Hilbert curve in index order and prints one line per cell with:
@@ -191,7 +414,7 @@ This report walks the Hilbert curve in index order and prints one line per cell 
 
 Each distance is the absolute difference between the current cell index and the neighbor cell index along the Hilbert curve. Missing neighbors print `-`.
 
-The histogram writer aggregates those same neighbor-distance values across the full report and prints one `distance=<value> count=<value> percentage=<value>%` line per distinct distance, sorted by ascending distance. The percentage is the bucket's share of all valid directed neighbor relationships in the grid, rounded to the nearest hundredth. The max-distance variant prints only rows with `distance <= max_distance`, then appends `cumulative_percentage=<value>%` computed from the exact subtotal count of the printed rows.
+The histogram writer aggregates those same neighbor-distance values across the full report and prints one `distance=<value> count=<value> percentage=<value>%` line per distinct distance, sorted by ascending distance. The percentage is always the bucket's share of all valid directed neighbor relationships in the full Moore neighborhood, rounded to the nearest hundredth. The filtered variant accepts `kind` and optional `max_distance`, prints only the selected rows, then appends `cumulative_percentage=<value>%` computed from the exact subtotal count of the printed rows.
 
 Example output line:
 
@@ -199,18 +422,21 @@ Example output line:
 d=5 pos=(0,3) N=1 NE=8 E=1 SE=- S=- SW=- W=- NW=-
 ```
 
-Neighbor lookup is handled by a private `neighborPoint(n, point, dir)` helper. It computes the candidate adjacent cell from the `Direction` value, rejects out-of-bounds results, and returns `null` for missing border or corner neighbors.
+Neighbor lookup is handled by a private `neighborPoint(n, point, dir)` helper in `src/modules/hilbert_neighbors.zig`. It computes the candidate adjacent cell from the `Direction` value, rejects out-of-bounds results, and returns `null` for missing border or corner neighbors.
 
 ## Command-Line Entry Point
 
-`src/main.zig` provides a minimal CLI:
+`src/main.zig` provides a minimal CLI. It imports the canonical `fast_life` package root and dispatches to `fast_life.hilbert_curve` or `fast_life.hilbert_neighbors`:
 
 ```text
 zig build run -- 2
 zig build run -- curve 2
 zig build run -- neighbors 2
 zig build run -- neighbors histogram 2
+zig build run -- neighbors histogram 2 kind orthogonal
 zig build run -- neighbors histogram 2 max-distance 4
+zig build run -- neighbors histogram 2 kind diagonal max-distance 4
+zig build run -- neighbors histogram 2 max-distance 4 kind diagonal
 ```
 
 Behavior:
@@ -219,7 +445,9 @@ Behavior:
 - `zig build run -- curve <order>` does the same explicitly
 - `zig build run -- neighbors <order>` prints Moore-neighbor distances
 - `zig build run -- neighbors histogram <order>` prints the histogram of neighbor distances
-- `zig build run -- neighbors histogram <order> max-distance <distance>` prints only distances `1..max_distance` and a final cumulative percentage row
+- `zig build run -- neighbors histogram <order> kind <all|orthogonal|diagonal>` filters the histogram by neighbor kind and appends a final cumulative percentage row
+- `zig build run -- neighbors histogram <order> max-distance <distance>` filters by inclusive distance and appends a final cumulative percentage row
+- `kind` and `max-distance` may be combined in either order
 - prints usage to stderr on missing, malformed, or extra arguments
 - prints usage again when `order > 8`
 - writes the selected report to stdout
@@ -231,9 +459,22 @@ The file uses the current Zig `0.15.2` file writer API:
 
 The program passes `&writer.interface` into helpers that expect `std.Io.Writer`, then explicitly calls `flush()` before exiting.
 
+## Performance Characteristics
+
+The classic `rot + d2xy / xy2d` approach has these properties:
+
+| Property        | Value                  |
+| --------------- | ---------------------- |
+| Time complexity | `O(order)` per point   |
+| Memory          | `O(1)`                 |
+| Arithmetic      | integer bit operations |
+| Branching       | minimal                |
+
+Within this repository's `order <= 8` constraint, each transform completes in at most eight loop iterations.
+
 ## Tests
 
-All tests live in `src/hilbert.zig` and run with:
+Tests live inline in `src/modules/hilbert_curve.zig`, `src/modules/hilbert_neighbors.zig`, `src/root.zig`, and `src/main.zig` and run with:
 
 ```text
 zig build test
@@ -241,21 +482,24 @@ zig build test
 
 The suite covers:
 
-- the full order-2 traversal table from the design note
+- the full order-2 traversal table shown in this document
 - the specific example `d2xy(2, 5) == Point{ .x = 0, .y = 3 }`
 - exhaustive round-trips for every valid point in orders `0..8`
 - exact neighbor-distance output for orders `0` and `1`
 - exact histogram output for orders `0` and `1`
 - exact histogram max-distance output for order `2`
+- exact orthogonal and diagonal histogram output for order `1`
+- exact combined kind and max-distance histogram output for order `2`
 - percentage formatting and rounding behavior
 - Moore-neighbor distance checks for every point in orders `0..8`
 - histogram total-count validation for every point in orders `0..8`
+- orthogonal and diagonal histogram counts partition the full histogram for every order in `0..8`
 - bounds checking for generated coordinates
 - invalid order, index, and coordinate errors
 - exact `writeCurve` output for order `2`
 - CLI parsing for bare and explicit output modes
 
-These tests validate both correctness and the repository’s chosen public interface.
+These tests validate both the generic Hilbert mapping and the repository's public interface choices.
 
 ## Build Integration
 
@@ -265,14 +509,22 @@ These tests validate both correctness and the repository’s chosen public inter
 - `zig build run -- <order>` to run the generator
 - `zig build test` to execute the unit tests
 
-The executable is named `hilbert_curve`.
+It also defines the canonical `fast_life` package import rooted at `src/root.zig`. The executable is named `hilbert_curve`.
 
 ## Summary
 
-The Zig implementation is a direct, type-safe translation of the standard Hilbert mapping algorithm with three repository-specific constraints:
+This codebase keeps the standard Hilbert mapping algorithm recognizable:
+
+- two bits per level choose the quadrant
+- `rot` fixes orientation before each offset or inverse step
+- `d2xy` builds outward from small squares
+- `xy2d` collapses inward from large squares
+
+The repository then adds a few explicit constraints and conveniences on top:
 
 - public coordinates and indices use `u16`
 - supported orders are limited to `0..8`
-- the inverse transform uses signed internal rotation to avoid overflow during intermediate steps
+- `xy2d` uses signed internal rotation to avoid overflow during intermediate steps
+- additional helpers generate full traversals and Moore-neighbor distance reports
 
-Within those constraints, the code preserves the original algorithm’s main benefits: direct random access, no recursion, constant memory usage, and simple exhaustive testing.
+Within those constraints, the implementation preserves the algorithm's main advantages: direct random access, no recursion, constant memory usage, and exhaustive test coverage.

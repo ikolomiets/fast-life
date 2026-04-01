@@ -6,7 +6,9 @@ This document describes the Moore-neighbor distance report implemented for the H
 
 Relevant code:
 
-- `src/hilbert.zig` contains the `Direction` enum, neighbor lookup, and report writer
+- `src/modules/hilbert_curve.zig` contains the core Hilbert types and mapping functions
+- `src/modules/hilbert_neighbors.zig` contains neighbor lookup, histogram logic, and report writers
+- `src/root.zig` re-exports the canonical modules
 - `src/main.zig` exposes the report through the CLI
 
 The report walks the Hilbert curve from index `0` through `maxIndex(order)` and, for every visited cell, prints one line describing the Hilbert-curve distance to each of that cell's Moore neighbors.
@@ -92,22 +94,24 @@ Processing steps:
 1. Validate `order`
 2. Compute `n = gridSize(order)`
 3. Iterate `d` from `0` through `maxIndex(order)`
-4. Compute the current coordinate with `d2xyUnchecked(n, d)`
+4. Compute the current coordinate with `hilbert.d2xy(order, d)`
 5. For each direction in fixed order `N NE E SE S SW W NW`:
    - call `neighborPoint`
-   - if the neighbor exists, compute `neighbor_d = xy2dUnchecked(n, neighbor)`
+   - if the neighbor exists, compute `neighbor_d = hilbert.xy2d(order, neighbor)`
    - print `abs(neighbor_d - d)`
    - otherwise print `-`
 
-The report reuses the existing unchecked Hilbert transforms because the loop already guarantees valid indices and points.
+The neighbor module depends only on the public Hilbert API. It does not reach into private unchecked transform helpers from the core module.
 
 ## Histogram Mode
 
 The implementation also exposes:
 
 ```zig
+pub const NeighborKind = enum { all, orthogonal, diagonal };
 pub fn writeNeighborDistanceHistogram(writer: anytype, order: u8) !void
 pub fn writeNeighborDistanceHistogramMaxDistance(writer: anytype, order: u8, max_distance: u16) !void
+pub fn writeNeighborDistanceHistogramFiltered(writer: anytype, order: u8, kind: NeighborKind, max_distance: ?u16) !void
 ```
 
 This mode computes the frequency of every distance that appears among valid Moore-neighbor relationships in the report.
@@ -117,7 +121,7 @@ Behavior:
 - only valid neighbors are counted
 - missing neighbors do not contribute
 - if cell `A` reports cell `B` as a neighbor and cell `B` reports cell `A`, both occurrences are counted
-- each percentage uses the total number of valid directed neighbor relationships in the grid as its denominator
+- each percentage uses the total number of valid directed neighbor relationships in the full Moore neighborhood as its denominator, even when a `kind` filter is active
 - results are sorted by ascending distance
 
 Each output line has the form:
@@ -136,11 +140,40 @@ distance=3 count=2 percentage=16.67%
 
 The percentage is rounded to the nearest hundredth. Because of rounding, the printed percentages may not sum to exactly `100.00%`.
 
-Internally the implementation accumulates counts in a fixed array indexed by distance, sums the total valid directed neighbor relationships, then emits the non-zero buckets in ascending distance order.
+Internally the implementation accumulates counts in a fixed array indexed by distance, tracks the total valid directed neighbor relationships for `kind=all`, then emits the selected non-zero buckets in ascending distance order.
+
+### Kind Filter
+
+Histogram mode supports an optional neighbor-kind filter:
+
+```text
+zig build run -- neighbors histogram <order> kind <all|orthogonal|diagonal>
+```
+
+Behavior:
+
+- `all` counts all 8 directions
+- `orthogonal` counts only `N`, `E`, `S`, `W`
+- `diagonal` counts only `NE`, `SE`, `SW`, `NW`
+- any explicit filter form appends one summary row:
+
+```text
+cumulative_percentage=<value>%
+```
+
+- `kind all` is accepted explicitly and emits the full histogram plus `cumulative_percentage=100.00%`
+
+Example for order `1` with `kind orthogonal`:
+
+```text
+distance=1 count=6 percentage=50.00%
+distance=3 count=2 percentage=16.67%
+cumulative_percentage=66.67%
+```
 
 ### Max-Distance Filter
 
-Histogram mode also supports an optional distance cutoff:
+Histogram mode also supports an optional inclusive distance cutoff:
 
 ```text
 zig build run -- neighbors histogram <order> max-distance <distance>
@@ -150,25 +183,28 @@ Behavior:
 
 - `distance` is parsed as `u16`
 - only rows with `distance <= max_distance` are emitted
-- the cutoff is inclusive
-- the filtered form always appends one summary row:
-
-```text
-cumulative_percentage=<value>%
-```
-
+- the filtered form appends `cumulative_percentage=<value>%`
 - the summary percentage is computed from the exact subtotal count for displayed rows, not by summing already-rounded row percentages
 - `max-distance 0` emits no distance rows and `cumulative_percentage=0.00%`
 - a cutoff above the largest present distance emits the full histogram plus `cumulative_percentage=100.00%`
 
-Example for order `2` with `max-distance 4`:
+### Combining Filters
+
+`kind` and `max-distance` may be provided together in either order:
 
 ```text
-distance=1 count=30 percentage=35.71%
+zig build run -- neighbors histogram <order> kind <kind> max-distance <distance>
+zig build run -- neighbors histogram <order> max-distance <distance> kind <kind>
+```
+
+The `max-distance` cutoff is applied after the `kind` selection.
+
+Example for order `2` with `kind diagonal max-distance 4`:
+
+```text
 distance=2 count=24 percentage=28.57%
-distance=3 count=10 percentage=11.90%
 distance=4 count=4 percentage=4.76%
-cumulative_percentage=80.95%
+cumulative_percentage=33.33%
 ```
 
 ## Output Format
@@ -204,7 +240,10 @@ zig build run -- <order>
 zig build run -- curve <order>
 zig build run -- neighbors <order>
 zig build run -- neighbors histogram <order>
+zig build run -- neighbors histogram <order> kind <all|orthogonal|diagonal>
 zig build run -- neighbors histogram <order> max-distance <distance>
+zig build run -- neighbors histogram <order> kind <all|orthogonal|diagonal> max-distance <distance>
+zig build run -- neighbors histogram <order> max-distance <distance> kind <all|orthogonal|diagonal>
 ```
 
 Mode behavior:
@@ -213,13 +252,15 @@ Mode behavior:
 - `curve <order>` is an explicit alias for the original mode
 - `neighbors <order>` emits the Moore-neighbor distance report
 - `neighbors histogram <order>` emits the histogram of neighbor distances
+- `neighbors histogram <order> kind <kind>` emits only the selected kind and a final cumulative percentage row
 - `neighbors histogram <order> max-distance <distance>` emits only distances `1..max_distance` and a final cumulative percentage row
+- the two histogram filters may be combined in either order
 
-Argument parsing is handled in `src/main.zig` by `parseCommand`, which selects either curve output or neighbor-distance output before dispatching to the appropriate writer.
+Argument parsing is handled in `src/main.zig` by `parseCommand`, which selects either curve output or neighbor-distance output before dispatching to the appropriate writer from the canonical `fast_life` package root.
 
 ## Tests
 
-The implementation is covered by unit tests in `src/hilbert.zig` and `src/main.zig`.
+The implementation is covered by unit tests in `src/modules/hilbert_curve.zig`, `src/modules/hilbert_neighbors.zig`, `src/root.zig`, and `src/main.zig`.
 
 Neighbor-report-specific coverage includes:
 
@@ -227,15 +268,20 @@ Neighbor-report-specific coverage includes:
 - exact golden output for order `1`
 - exact histogram output for orders `0` and `1`
 - exact histogram max-distance output for order `2`
+- exact orthogonal and diagonal histogram output for order `1`
+- exact combined kind and max-distance histogram output for order `2`
 - percentage formatting and rounding behavior
 - exhaustive neighbor validation for every point in orders `0..8`
 - histogram total-count validation for every point in orders `0..8`
+- orthogonal and diagonal histogram counts partition the full histogram for every order in `0..8`
 - CLI parsing tests for:
   - bare `<order>`
   - `curve <order>`
   - `neighbors <order>`
   - `neighbors histogram <order>`
+  - `neighbors histogram <order> kind <kind>`
   - `neighbors histogram <order> max-distance <distance>`
+  - combined `kind` and `max-distance` in either order
   - invalid argument shapes
 
 Run all tests with:
