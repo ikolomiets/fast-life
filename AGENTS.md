@@ -4,7 +4,7 @@
 
 This repository is centered on a small Zig implementation of the Hilbert curve algorithm plus a combined algorithm and implementation note. The main files are:
 
-- `hilbert_curve_implementation.md` for the algorithm explanation and Zig implementation details
+- `docs/hilbert_curve_implementation.md` for the algorithm explanation and Zig implementation details
 - `build.zig` for build, run, and test entry points
 - `src/root.zig` for the canonical package root that re-exports project modules
 - `src/modules/hilbert_curve.zig` for the core Hilbert mapping module and its inline tests
@@ -25,7 +25,7 @@ Use `rg "TODO|FIXME" .` before submitting changes if you add follow-up notes.
 
 ## Coding Style & Naming Conventions
 
-Use Zig with small, explicit helpers and straightforward integer math. Keep the algorithm iterative and close to the reference material in `hilbert_curve_implementation.md`. For documentation, use short sections and fenced code blocks for pseudocode or shell examples.
+Use Zig with small, explicit helpers and straightforward integer math. Keep the algorithm iterative and close to the reference material in `docs/hilbert_curve_implementation.md`. For documentation, use short sections and fenced code blocks for pseudocode or shell examples.
 
 For filenames:
 
