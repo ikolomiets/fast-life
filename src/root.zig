@@ -1,7 +1,6 @@
 const std = @import("std");
 
-pub const block = @import("modules/block.zig");
-pub const grid = @import("modules/grid.zig");
+pub const grid = @import("modules/binary_grid.zig");
 pub const hilbert_curve = @import("modules/hilbert_curve.zig");
 pub const hilbert_neighbors = @import("modules/hilbert_neighbors.zig");
 
@@ -16,11 +15,13 @@ test "package root exposes canonical modules" {
     try std.testing.expectEqualStrings("cumulative_percentage=0.00%\n", stream.getWritten());
 }
 
-test "package root exposes block and grid modules" {
-    const Grid = grid.BinaryGrid(0, block.PackedBlock4x4);
+test "package root exposes grid block and grid APIs" {
+    const Grid = grid.BinaryGrid(0);
     var binary_grid = Grid.initEmpty();
+    var block = grid.Block.init(false);
 
-    try binary_grid.setCell(.{ .x = 3, .y = 3 }, true);
+    block.set(3, 3, true);
+    try binary_grid.setBlock(0, block);
 
     try std.testing.expect(try binary_grid.getCell(.{ .x = 3, .y = 3 }));
     try std.testing.expect((try binary_grid.getBlock(0)).get(3, 3));

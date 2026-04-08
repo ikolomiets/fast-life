@@ -1,5 +1,54 @@
 const std = @import("std");
 
+pub const Block = struct {
+    bits: u16,
+
+    pub const side: usize = 4;
+
+    const Self = @This();
+    const filled_bits = std.math.maxInt(u16);
+
+    pub fn init(fill: bool) Self {
+        return .{
+            .bits = if (fill) filled_bits else 0,
+        };
+    }
+
+    fn bitIndex(x: u2, y: u2) u4 {
+        return (@as(u4, y) << 2) | @as(u4, x);
+    }
+
+    fn bitMask(x: u2, y: u2) u16 {
+        return @as(u16, 1) << bitIndex(x, y);
+    }
+
+    pub fn get(self: Self, x: u2, y: u2) bool {
+        return (self.bits & bitMask(x, y)) != 0;
+    }
+
+    pub fn set(self: *Self, x: u2, y: u2, value: bool) void {
+        const mask = bitMask(x, y);
+        const fill_mask: u16 = if (value) filled_bits else 0;
+        self.bits = (self.bits & ~mask) | (fill_mask & mask);
+    }
+
+    pub fn rowMask(self: Self, y: u2) u4 {
+        return @intCast((self.bits >> (@as(u4, y) << 2)) & 0b1111);
+    }
+
+    pub fn count(self: Self) u5 {
+        return @intCast(@popCount(self.bits));
+    }
+
+    pub fn any(self: Self) bool {
+        return self.bits != 0;
+    }
+
+    pub fn all(self: Self) bool {
+        return self.bits == filled_bits;
+    }
+};
+
 pub const BlockCoord = struct {
     x: usize,
     y: usize,
@@ -10,59 +59,27 @@ pub const CellCoord = struct {
     y: usize,
 };
 
-fn pointerToBlock(comptime GridPtr: type, comptime Block: type) type {
+fn pointerToBlock(comptime GridPtr: type) type {
     return switch (@typeInfo(GridPtr)) {
         .pointer => |pointer_info| if (pointer_info.is_const) *const Block else *Block,
         else => @compileError("expected a grid pointer receiver"),
     };
 }
 
-fn sliceOfBlocks(comptime GridPtr: type, comptime Block: type) type {
+fn sliceOfBlocks(comptime GridPtr: type) type {
     return switch (@typeInfo(GridPtr)) {
         .pointer => |pointer_info| if (pointer_info.is_const) []const Block else []Block,
         else => @compileError("expected a grid pointer receiver"),
     };
 }
 
-fn validateBlock(comptime Block: type) void {
-    if (!@hasDecl(Block, "side")) {
-        @compileError(@typeName(Block) ++ " must declare pub const side");
-    }
-    if (!@hasDecl(Block, "init")) {
-        @compileError(@typeName(Block) ++ " must declare pub fn init(fill: bool)");
-    }
-    if (!@hasDecl(Block, "get")) {
-        @compileError(@typeName(Block) ++ " must declare pub fn get(self, x: u2, y: u2) bool");
-    }
-    if (!@hasDecl(Block, "set")) {
-        @compileError(@typeName(Block) ++ " must declare pub fn set(self: *Self, x: u2, y: u2, value: bool) void");
-    }
-    if (Block.side != 4) {
-        @compileError(@typeName(Block) ++ " must use side = 4");
-    }
-
-    if (@TypeOf(Block.init) != fn (bool) Block) {
-        @compileError(@typeName(Block) ++ ".init(fill) must have type fn (bool) " ++ @typeName(Block));
-    }
-    if (@TypeOf(Block.get) != fn (Block, u2, u2) bool) {
-        @compileError(@typeName(Block) ++ ".get must have type fn (Self, u2, u2) bool");
-    }
-    if (@TypeOf(Block.set) != fn (*Block, u2, u2, bool) void) {
-        @compileError(@typeName(Block) ++ ".set must have type fn (*Self, u2, u2, bool) void");
-    }
-}
-
-pub fn BinaryGrid(comptime Order: usize, comptime Block: type) type {
-    comptime validateBlock(Block);
-
+pub fn BinaryGrid(comptime grid_order: usize) type {
     const Shift = std.math.Log2Int(usize);
-    const usize_bits = @typeInfo(usize).int.bits;
-    const order_shift: Shift = blk: {
-        if (Order >= usize_bits) {
-            @compileError("BinaryGrid Order is too large for usize");
-        }
-        break :blk @intCast(Order);
-    };
+    const max_order: usize = 12;
+    if (grid_order > max_order) {
+        @compileError("BinaryGrid order must be <= 12");
+    }
+    const order_shift: Shift = @intCast(grid_order);
 
     const block_side_shift: Shift = 2;
     const local_mask = Block.side - 1;
@@ -76,8 +93,7 @@ pub fn BinaryGrid(comptime Order: usize, comptime Block: type) type {
 
         const Self = @This();
 
-        pub const order: usize = Order;
-        pub const block_type = Block;
+        pub const order: usize = grid_order;
         pub const block_side: usize = Block.side;
         pub const blocks_per_side = blocks_per_side_value;
         pub const block_count = block_count_value;
@@ -156,32 +172,32 @@ pub fn BinaryGrid(comptime Order: usize, comptime Block: type) type {
             self.blocks[index] = value;
         }
 
-        pub fn blockPtr(self: anytype, index: usize) error{IndexOutOfRange}!pointerToBlock(@TypeOf(self), Block) {
+        pub fn blockPtr(self: anytype, index: usize) error{IndexOutOfRange}!pointerToBlock(@TypeOf(self)) {
             try validateBlockIndex(index);
             return &self.blocks[index];
         }
 
-        pub fn blockPtrUnchecked(self: anytype, index: usize) pointerToBlock(@TypeOf(self), Block) {
+        pub fn blockPtrUnchecked(self: anytype, index: usize) pointerToBlock(@TypeOf(self)) {
             std.debug.assert(index < block_count);
             return &self.blocks[index];
         }
 
-        pub fn blockPtrAt(self: anytype, coord: BlockCoord) error{BlockCoordOutOfRange}!pointerToBlock(@TypeOf(self), Block) {
+        pub fn blockPtrAt(self: anytype, coord: BlockCoord) error{BlockCoordOutOfRange}!pointerToBlock(@TypeOf(self)) {
             const index = try blockIndex(coord);
             return &self.blocks[index];
         }
 
-        pub fn blockPtrAtUnchecked(self: anytype, coord: BlockCoord) pointerToBlock(@TypeOf(self), Block) {
+        pub fn blockPtrAtUnchecked(self: anytype, coord: BlockCoord) pointerToBlock(@TypeOf(self)) {
             const index = blockIndexUnchecked(coord);
             return &self.blocks[index];
         }
 
-        pub fn rowBlocks(self: anytype, block_y: usize) error{BlockCoordOutOfRange}!sliceOfBlocks(@TypeOf(self), Block) {
+        pub fn rowBlocks(self: anytype, block_y: usize) error{BlockCoordOutOfRange}!sliceOfBlocks(@TypeOf(self)) {
             try validateBlockAxis(block_y);
             return rowBlocksUnchecked(self, block_y);
         }
 
-        pub fn rowBlocksUnchecked(self: anytype, block_y: usize) sliceOfBlocks(@TypeOf(self), Block) {
+        pub fn rowBlocksUnchecked(self: anytype, block_y: usize) sliceOfBlocks(@TypeOf(self)) {
             std.debug.assert(block_y < blocks_per_side);
             const start = block_y << order_shift;
             return self.blocks[start .. start + blocks_per_side];
@@ -252,39 +268,56 @@ pub fn BinaryGrid(comptime Order: usize, comptime Block: type) type {
     };
 }
 
-const block_module = @import("block.zig");
+test "Block initializes empty and filled states" {
+    const empty = Block.init(false);
+    const filled = Block.init(true);
 
-const MatrixBlock4x4 = struct {
-    cells: [4][4]bool,
+    try std.testing.expectEqual(@as(u16, 0), empty.bits);
+    try std.testing.expectEqual(@as(u5, 0), empty.count());
+    try std.testing.expect(!empty.any());
+    try std.testing.expect(!empty.all());
 
-    pub const side: usize = 4;
+    try std.testing.expectEqual(std.math.maxInt(u16), filled.bits);
+    try std.testing.expectEqual(@as(u5, 16), filled.count());
+    try std.testing.expect(filled.any());
+    try std.testing.expect(filled.all());
+}
 
-    const Self = @This();
+test "Block reads and writes individual cells" {
+    var block = Block.init(false);
 
-    pub fn init(fill: bool) Self {
-        const row = [_]bool{fill} ** 4;
-        return .{
-            .cells = [_][4]bool{row} ** 4,
-        };
-    }
+    try std.testing.expect(!block.get(0, 0));
+    try std.testing.expect(!block.get(3, 3));
 
-    pub fn get(self: Self, x: u2, y: u2) bool {
-        return self.cells[@as(usize, y)][@as(usize, x)];
-    }
+    block.set(0, 0, true);
+    block.set(2, 1, true);
+    block.set(3, 3, true);
 
-    pub fn set(self: *Self, x: u2, y: u2, value: bool) void {
-        self.cells[@as(usize, y)][@as(usize, x)] = value;
-    }
-};
+    try std.testing.expect(block.get(0, 0));
+    try std.testing.expect(block.get(2, 1));
+    try std.testing.expect(block.get(3, 3));
+    try std.testing.expectEqual(@as(u5, 3), block.count());
+    try std.testing.expectEqual(@as(u4, 0b0001), block.rowMask(0));
+    try std.testing.expectEqual(@as(u4, 0b0100), block.rowMask(1));
+    try std.testing.expectEqual(@as(u4, 0b0000), block.rowMask(2));
+    try std.testing.expectEqual(@as(u4, 0b1000), block.rowMask(3));
 
-test "BinaryGrid derives sizes from Order" {
-    try std.testing.expectEqual(@as(usize, 1), BinaryGrid(0, block_module.PackedBlock4x4).blocks_per_side);
-    try std.testing.expectEqual(@as(usize, 4), BinaryGrid(2, block_module.PackedBlock4x4).blocks_per_side);
-    try std.testing.expectEqual(@as(usize, 8), BinaryGrid(3, block_module.PackedBlock4x4).blocks_per_side);
+    block.set(2, 1, false);
+
+    try std.testing.expect(!block.get(2, 1));
+    try std.testing.expectEqual(@as(u5, 2), block.count());
+    try std.testing.expectEqual(@as(u4, 0b0000), block.rowMask(1));
+}
+
+test "BinaryGrid derives sizes from order" {
+    try std.testing.expectEqual(@as(usize, 1), BinaryGrid(0).blocks_per_side);
+    try std.testing.expectEqual(@as(usize, 4), BinaryGrid(2).blocks_per_side);
+    try std.testing.expectEqual(@as(usize, 8), BinaryGrid(3).blocks_per_side);
+    try std.testing.expectEqual(@as(usize, 4096), BinaryGrid(12).blocks_per_side);
 }
 
 test "BinaryGrid maps block coordinates and indices" {
-    const Grid = BinaryGrid(2, block_module.PackedBlock4x4);
+    const Grid = BinaryGrid(2);
 
     try std.testing.expectEqual(@as(usize, 0), try Grid.blockIndex(.{ .x = 0, .y = 0 }));
     try std.testing.expectEqual(@as(usize, 3), try Grid.blockIndex(.{ .x = 3, .y = 0 }));
@@ -299,10 +332,10 @@ test "BinaryGrid maps block coordinates and indices" {
 }
 
 test "BinaryGrid block access by index and coordinate reaches the same storage" {
-    const Grid = BinaryGrid(2, block_module.PackedBlock4x4);
+    const Grid = BinaryGrid(2);
     var grid = Grid.initEmpty();
 
-    var value = block_module.PackedBlock4x4.init(false);
+    var value = Block.init(false);
     value.set(1, 2, true);
 
     try grid.setBlock(5, value);
@@ -319,10 +352,10 @@ test "BinaryGrid block access by index and coordinate reaches the same storage" 
 }
 
 test "BinaryGrid rowBlocks exposes contiguous rows" {
-    const Grid = BinaryGrid(2, block_module.PackedBlock4x4);
+    const Grid = BinaryGrid(2);
     var grid = Grid.initEmpty();
 
-    var value = block_module.PackedBlock4x4.init(false);
+    var value = Block.init(false);
     value.set(0, 0, true);
     try grid.setBlock(8, value);
 
@@ -332,7 +365,7 @@ test "BinaryGrid rowBlocks exposes contiguous rows" {
 }
 
 test "BinaryGrid global cell access crosses block boundaries" {
-    const Grid = BinaryGrid(2, block_module.PackedBlock4x4);
+    const Grid = BinaryGrid(2);
     var grid = Grid.initEmpty();
 
     try grid.setCell(.{ .x = 3, .y = 3 }, true);
@@ -351,8 +384,8 @@ test "BinaryGrid global cell access crosses block boundaries" {
     try std.testing.expect((try grid.getBlock(5)).get(0, 0));
 }
 
-test "BinaryGrid stays decoupled from the block wire format" {
-    const Grid = BinaryGrid(1, MatrixBlock4x4);
+test "BinaryGrid initFilled populates the built-in Block storage" {
+    const Grid = BinaryGrid(1);
     var grid = Grid.initFilled();
 
     try std.testing.expect(try grid.getCell(.{ .x = 7, .y = 7 }));
@@ -364,7 +397,7 @@ test "BinaryGrid stays decoupled from the block wire format" {
 }
 
 test "BinaryGrid checked APIs reject out-of-range coordinates and indices" {
-    const Grid = BinaryGrid(2, block_module.PackedBlock4x4);
+    const Grid = BinaryGrid(2);
     var grid = Grid.initEmpty();
 
     try std.testing.expectError(error.BlockCoordOutOfRange, Grid.blockIndex(.{ .x = 4, .y = 0 }));

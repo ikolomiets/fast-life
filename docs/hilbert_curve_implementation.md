@@ -11,8 +11,7 @@ This repository implements the classic iterative 2-dimensional Hilbert curve map
 The Zig code lives in:
 
 - `src/root.zig` for the canonical `fast_life` package import
-- `src/modules/block.zig` for the packed 4x4 binary block type
-- `src/modules/grid.zig` for the generic dense binary-grid type
+- `src/modules/binary_grid.zig` for the built-in packed 4x4 block type and dense binary-grid API
 - `src/modules/hilbert_curve.zig` for the core Hilbert mapping API and inline tests
 - `src/modules/hilbert_neighbors.zig` for neighbor-distance analysis and inline tests
 - `src/main.zig` for the command-line entry point
