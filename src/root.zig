@@ -3,6 +3,7 @@ const std = @import("std");
 pub const grid = @import("modules/binary_grid.zig");
 pub const hilbert_curve = @import("modules/hilbert_curve.zig");
 pub const hilbert_neighbors = @import("modules/hilbert_neighbors.zig");
+pub const life_rle = @import("modules/life_rle.zig");
 
 test "package root exposes canonical modules" {
     try std.testing.expectEqualDeep(hilbert_curve.Point{ .x = 0, .y = 3 }, try hilbert_curve.d2xy(2, 5));
@@ -25,4 +26,18 @@ test "package root exposes grid block and grid APIs" {
 
     try std.testing.expect(try binary_grid.getCell(.{ .x = 3, .y = 3 }));
     try std.testing.expect((try binary_grid.getBlock(0)).get(3, 3));
+}
+
+test "package root exposes life_rle module" {
+    var pattern = try life_rle.parsePattern(std.testing.allocator,
+        \\x = 1, y = 1
+        \\o!
+        \\
+    );
+    defer pattern.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), pattern.width);
+    try std.testing.expectEqual(@as(usize, 1), pattern.height);
+    try std.testing.expectEqual(@as(usize, 1), pattern.live_cells.len);
+    try std.testing.expectEqualDeep(life_rle.PatternCell{ .x = 0, .y = 0 }, pattern.live_cells[0]);
 }
