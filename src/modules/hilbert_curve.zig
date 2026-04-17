@@ -201,9 +201,9 @@ test "rejects invalid input" {
 
 test "writeCurve emits indexed coordinates" {
     var buffer: [256]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
+    var writer: std.Io.Writer = .fixed(&buffer);
 
-    try writeCurve(stream.writer(), 2);
+    try writeCurve(&writer, 2);
 
     const expected =
         \\0 0 0
@@ -225,5 +225,5 @@ test "writeCurve emits indexed coordinates" {
         \\
     ;
 
-    try std.testing.expectEqualStrings(expected, stream.getWritten());
+    try std.testing.expectEqualStrings(expected, writer.buffered());
 }

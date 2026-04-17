@@ -453,10 +453,12 @@ Behavior:
 - prints usage again when `order > 8`
 - writes the selected report to stdout
 
-The file uses the current Zig `0.15.2` file writer API:
+The file uses Zig `0.16.0` process and I/O initialization:
 
-- `std.fs.File.stdout().writer(&buffer)` for buffered curve output
-- `std.fs.File.stderr().writer(&.{})` for short unbuffered usage messages
+- `pub fn main(init: std.process.Init) !void`
+- `init.minimal.args.toSlice(init.arena.allocator())` for CLI args
+- `std.Io.File.stdout().writer(init.io, &buffer)` for buffered curve output
+- `std.Io.File.stderr().writer(init.io, &.{})` for short unbuffered usage messages
 
 The program passes `&writer.interface` into helpers that expect `std.Io.Writer`, then explicitly calls `flush()` before exiting.
 

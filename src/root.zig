@@ -9,11 +9,11 @@ test "package root exposes canonical modules" {
     try std.testing.expectEqualDeep(hilbert_curve.Point{ .x = 0, .y = 3 }, try hilbert_curve.d2xy(2, 5));
 
     var buffer: [64]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
+    var writer: std.Io.Writer = .fixed(&buffer);
 
-    try hilbert_neighbors.writeNeighborDistanceHistogramFiltered(stream.writer(), 1, .diagonal, 1);
+    try hilbert_neighbors.writeNeighborDistanceHistogramFiltered(&writer, 1, .diagonal, 1);
 
-    try std.testing.expectEqualStrings("cumulative_percentage=0.00%\n", stream.getWritten());
+    try std.testing.expectEqualStrings("cumulative_percentage=0.00%\n", writer.buffered());
 }
 
 test "package root exposes grid block and grid APIs" {

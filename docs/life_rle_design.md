@@ -85,9 +85,9 @@ pub const ParseError = std.mem.Allocator.Error || error{
 pub const max_pattern_file_bytes: usize = 2 * 1024 * 1024;
 
 pub fn parsePattern(allocator: std.mem.Allocator, input: []const u8) ParseError!Pattern
-pub fn parsePatternFile(allocator: std.mem.Allocator, path: []const u8) !Pattern
+pub fn parsePatternFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !Pattern
 pub fn writePattern(writer: anytype, pattern: Pattern) !void
-pub fn writePatternFile(path: []const u8, pattern: Pattern) !void
+pub fn writePatternFile(io: std.Io, path: []const u8, pattern: Pattern) !void
 pub fn extractPattern(allocator: std.mem.Allocator, grid: anytype) (std.mem.Allocator.Error || error{EmptyPattern})!Pattern
 pub fn writeGrid(writer: anytype, grid: anytype) !void
 pub fn applyPattern(grid: anytype, pattern: Pattern, origin: binary_grid.CellCoord) !void
@@ -134,10 +134,10 @@ Malformed input is reported with these explicit errors:
 - `PatternTooTall`: row breaks exceed the declared height
 - `TrailingData`: non-whitespace content appears after `!`
 
-For file parsing, `parsePatternFile` reads through `std.fs.cwd()` and applies a fixed size cap:
+For file parsing, `parsePatternFile` reads through `std.Io.Dir.cwd()` and applies a fixed size cap:
 
 - `max_pattern_file_bytes` is `2 MiB`
-- files larger than that fail with `error.FileTooBig`
+- files larger than that fail with `error.StreamTooLong`
 - the cap is intended to comfortably cover canonical RLE for dense patterns up to roughly `1024 x 1024`
 
 ## Encoding Behavior
@@ -160,7 +160,7 @@ bo$2bo$3o!
 
 The writer only emits explicit dead-cell runs when they are needed to reach the next live run in a row. Trailing dead cells at the end of a row are omitted.
 
-`writePatternFile` uses the same canonical encoding, but writes it directly to a file path through `std.fs.cwd()`. It creates or truncates the destination file and preserves the same `error.InvalidPattern` validation behavior as `writePattern`.
+`writePatternFile` uses the same canonical encoding, but writes it directly to a file path through `std.Io.Dir.cwd()`. It creates or truncates the destination file and preserves the same `error.InvalidPattern` validation behavior as `writePattern`.
 
 ## Grid Integration
 

@@ -65,7 +65,8 @@ fn gridType(comptime GridPtr: type) type {
 }
 
 fn trimLine(line: []const u8) []const u8 {
-    return std.mem.trim(u8, std.mem.trimRight(u8, line, "\r"), " \t");
+    const without_cr = if (line.len != 0 and line[line.len - 1] == '\r') line[0 .. line.len - 1] else line;
+    return std.mem.trim(u8, without_cr, " \t");
 }
 
 fn parseDimension(value_text: []const u8) ParseError!usize {
@@ -81,7 +82,7 @@ fn parseHeader(line: []const u8) ParseError!Header {
         const field = std.mem.trim(u8, field_text, " \t");
         if (field.len == 0) return error.InvalidHeader;
 
-        const equals_index = std.mem.indexOfScalar(u8, field, '=') orelse return error.InvalidHeader;
+        const equals_index = std.mem.findScalar(u8, field, '=') orelse return error.InvalidHeader;
         const key = std.mem.trim(u8, field[0..equals_index], " \t");
         const value = field[equals_index + 1 ..];
 
@@ -310,7 +311,7 @@ pub fn parsePattern(allocator: std.mem.Allocator, input: []const u8) ParseError!
         if (line[0] == '#') continue;
 
         if (header == null) {
-            if (std.mem.indexOfScalar(u8, line, '=') == null) {
+            if (std.mem.findScalar(u8, line, '=') == null) {
                 return error.MissingHeader;
             }
             header = try parseHeader(line);
@@ -330,8 +331,8 @@ pub fn parsePattern(allocator: std.mem.Allocator, input: []const u8) ParseError!
     };
 }
 
-pub fn parsePatternFile(allocator: std.mem.Allocator, path: []const u8) !Pattern {
-    const input = try std.fs.cwd().readFileAlloc(allocator, path, max_pattern_file_bytes);
+pub fn parsePatternFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !Pattern {
+    const input = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(max_pattern_file_bytes));
     defer allocator.free(input);
 
     return parsePattern(allocator, input);
@@ -365,15 +366,20 @@ pub fn writePattern(writer: anytype, pattern: Pattern) !void {
     try writer.writeAll("!\n");
 }
 
-pub fn writePatternFile(path: []const u8, pattern: Pattern) !void {
-    var file = try std.fs.cwd().createFile(path, .{});
-    defer file.close();
+pub fn writePatternFile(io: std.Io, path: []const u8, pattern: Pattern) !void {
+    var file = try std.Io.Dir.cwd().createFile(io, path, .{});
+    defer file.close(io);
 
-    var file_writer = file.writer(&.{});
+    var file_writer = file.writer(io, &.{});
     const writer = &file_writer.interface;
 
-    try writePattern(writer, pattern);
-    try writer.flush();
+    writePattern(writer, pattern) catch |err| switch (err) {
+        error.WriteFailed => return file_writer.err.?,
+        else => return err,
+    };
+    writer.flush() catch |err| switch (err) {
+        error.WriteFailed => return file_writer.err.?,
+    };
 }
 
 pub fn extractPattern(allocator: std.mem.Allocator, grid: anytype) (std.mem.Allocator.Error || error{EmptyPattern})!Pattern {
@@ -533,7 +539,7 @@ test "parsePattern rejects malformed input" {
 
 test "writePattern emits canonical RLE" {
     var buffer: [128]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
+    var writer: std.Io.Writer = .fixed(&buffer);
     var live_cells = [_]PatternCell{
         .{ .x = 1, .y = 0 },
         .{ .x = 2, .y = 1 },
@@ -542,7 +548,7 @@ test "writePattern emits canonical RLE" {
         .{ .x = 2, .y = 2 },
     };
 
-    try writePattern(stream.writer(), .{
+    try writePattern(&writer, .{
         .width = 3,
         .height = 3,
         .live_cells = live_cells[0..],
@@ -552,18 +558,18 @@ test "writePattern emits canonical RLE" {
         \\x = 3, y = 3
         \\bo$2bo$3o!
         \\
-    , stream.getWritten());
+    , writer.buffered());
 }
 
 test "writePattern rejects invalid public Pattern values" {
     var buffer: [128]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
+    var writer: std.Io.Writer = .fixed(&buffer);
     var live_cells = [_]PatternCell{
         .{ .x = 1, .y = 1 },
         .{ .x = 0, .y = 1 },
     };
 
-    try std.testing.expectError(error.InvalidPattern, writePattern(stream.writer(), .{
+    try std.testing.expectError(error.InvalidPattern, writePattern(&writer, .{
         .width = 2,
         .height = 2,
         .live_cells = live_cells[0..],
@@ -582,10 +588,10 @@ test "parse and write round-trip preserves geometry and live cells" {
     defer pattern.deinit(std.testing.allocator);
 
     var buffer: [128]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
-    try writePattern(stream.writer(), pattern);
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try writePattern(&writer, pattern);
 
-    var roundtrip = try parsePattern(std.testing.allocator, stream.getWritten());
+    var roundtrip = try parsePattern(std.testing.allocator, writer.buffered());
     defer roundtrip.deinit(std.testing.allocator);
 
     try expectPattern(roundtrip, pattern.width, pattern.height, pattern.live_cells);
@@ -606,13 +612,13 @@ test "writePatternFile writes canonical RLE text" {
         .{ .x = 2, .y = 2 },
     };
 
-    try writePatternFile(file_path, .{
+    try writePatternFile(std.testing.io, file_path, .{
         .width = 3,
         .height = 3,
         .live_cells = live_cells[0..],
     });
 
-    const written = try std.fs.cwd().readFileAlloc(std.testing.allocator, file_path, max_pattern_file_bytes);
+    const written = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, file_path, std.testing.allocator, .limited(max_pattern_file_bytes));
     defer std.testing.allocator.free(written);
 
     try std.testing.expectEqualStrings(
@@ -626,7 +632,7 @@ test "parsePatternFile parses a pattern from disk" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "glider.rle",
         .data =
         \\#C glider
@@ -639,7 +645,7 @@ test "parsePatternFile parses a pattern from disk" {
     var path_buffer: [128]u8 = undefined;
     const file_path = try tmpFilePath(&path_buffer, &tmp_dir, "glider.rle");
 
-    var pattern = try parsePatternFile(std.testing.allocator, file_path);
+    var pattern = try parsePatternFile(std.testing.io, std.testing.allocator, file_path);
     defer pattern.deinit(std.testing.allocator);
 
     try expectPattern(pattern, 3, 3, &.{
@@ -655,10 +661,10 @@ test "parsePatternFile rejects files larger than the built-in cap" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    var file = try tmp_dir.dir.createFile("too_big.rle", .{});
-    defer file.close();
+    var file = try tmp_dir.dir.createFile(std.testing.io, "too_big.rle", .{});
+    defer file.close(std.testing.io);
 
-    var file_writer = file.writer(&.{});
+    var file_writer = file.writer(std.testing.io, &.{});
     const writer = &file_writer.interface;
     const chunk = [_]u8{'o'} ** 4096;
 
@@ -673,7 +679,7 @@ test "parsePatternFile rejects files larger than the built-in cap" {
     var path_buffer: [128]u8 = undefined;
     const file_path = try tmpFilePath(&path_buffer, &tmp_dir, "too_big.rle");
 
-    try std.testing.expectError(error.FileTooBig, parsePatternFile(std.testing.allocator, file_path));
+    try std.testing.expectError(error.StreamTooLong, parsePatternFile(std.testing.io, std.testing.allocator, file_path));
 }
 
 test "extractPattern trims a grid to the live bounding box" {
@@ -703,14 +709,14 @@ test "writeGrid matches the trimmed grid contents" {
     try grid.setCell(.{ .x = 6, .y = 7 }, true);
 
     var buffer: [128]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
-    try writeGrid(stream.writer(), &grid);
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try writeGrid(&writer, &grid);
 
     try std.testing.expectEqualStrings(
         \\x = 3, y = 2
         \\obo$bo!
         \\
-    , stream.getWritten());
+    , writer.buffered());
 }
 
 test "applyPattern overlays live cells without clearing unrelated cells" {
@@ -758,6 +764,6 @@ test "extractPattern and writeGrid reject empty grids" {
     try std.testing.expectError(error.EmptyPattern, extractPattern(std.testing.allocator, &grid));
 
     var buffer: [64]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
-    try std.testing.expectError(error.EmptyPattern, writeGrid(stream.writer(), &grid));
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try std.testing.expectError(error.EmptyPattern, writeGrid(&writer, &grid));
 }

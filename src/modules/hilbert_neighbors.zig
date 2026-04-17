@@ -235,23 +235,23 @@ pub fn writeNeighborDistanceHistogramFiltered(writer: anytype, order: u8, kind: 
 
 test "writeNeighborDistances emits expected order 0 report" {
     var buffer: [128]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
+    var writer: std.Io.Writer = .fixed(&buffer);
 
-    try writeNeighborDistances(stream.writer(), 0);
+    try writeNeighborDistances(&writer, 0);
 
     const expected =
         \\d=0 pos=(0,0) N=- NE=- E=- SE=- S=- SW=- W=- NW=-
         \\
     ;
 
-    try std.testing.expectEqualStrings(expected, stream.getWritten());
+    try std.testing.expectEqualStrings(expected, writer.buffered());
 }
 
 test "writeNeighborDistances emits expected order 1 report" {
     var buffer: [512]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
+    var writer: std.Io.Writer = .fixed(&buffer);
 
-    try writeNeighborDistances(stream.writer(), 1);
+    try writeNeighborDistances(&writer, 1);
 
     const expected =
         \\d=0 pos=(0,0) N=- NE=- E=3 SE=2 S=1 SW=- W=- NW=-
@@ -261,7 +261,7 @@ test "writeNeighborDistances emits expected order 1 report" {
         \\
     ;
 
-    try std.testing.expectEqualStrings(expected, stream.getWritten());
+    try std.testing.expectEqualStrings(expected, writer.buffered());
 }
 
 test "neighbor distances are correct for all points and directions" {
@@ -304,18 +304,18 @@ test "neighbor distances are correct for all points and directions" {
 
 test "writeNeighborDistanceHistogram emits empty order 0 report" {
     var buffer: [64]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
+    var writer: std.Io.Writer = .fixed(&buffer);
 
-    try writeNeighborDistanceHistogram(stream.writer(), 0);
+    try writeNeighborDistanceHistogram(&writer, 0);
 
-    try std.testing.expectEqualStrings("", stream.getWritten());
+    try std.testing.expectEqualStrings("", writer.buffered());
 }
 
 test "writeNeighborDistanceHistogram emits expected order 1 report" {
     var buffer: [128]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
+    var writer: std.Io.Writer = .fixed(&buffer);
 
-    try writeNeighborDistanceHistogram(stream.writer(), 1);
+    try writeNeighborDistanceHistogram(&writer, 1);
 
     const expected =
         \\distance=1 count=6 percentage=50.00%
@@ -324,14 +324,14 @@ test "writeNeighborDistanceHistogram emits expected order 1 report" {
         \\
     ;
 
-    try std.testing.expectEqualStrings(expected, stream.getWritten());
+    try std.testing.expectEqualStrings(expected, writer.buffered());
 }
 
 test "writeNeighborDistanceHistogram emits expected order 2 report" {
     var buffer: [512]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
+    var writer: std.Io.Writer = .fixed(&buffer);
 
-    try writeNeighborDistanceHistogram(stream.writer(), 2);
+    try writeNeighborDistanceHistogram(&writer, 2);
 
     const expected =
         \\distance=1 count=30 percentage=35.71%
@@ -346,23 +346,23 @@ test "writeNeighborDistanceHistogram emits expected order 2 report" {
         \\
     ;
 
-    try std.testing.expectEqualStrings(expected, stream.getWritten());
+    try std.testing.expectEqualStrings(expected, writer.buffered());
 }
 
 test "writeNeighborDistanceHistogramMaxDistance emits zero cutoff summary" {
     var buffer: [64]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
+    var writer: std.Io.Writer = .fixed(&buffer);
 
-    try writeNeighborDistanceHistogramMaxDistance(stream.writer(), 1, 0);
+    try writeNeighborDistanceHistogramMaxDistance(&writer, 1, 0);
 
-    try std.testing.expectEqualStrings("cumulative_percentage=0.00%\n", stream.getWritten());
+    try std.testing.expectEqualStrings("cumulative_percentage=0.00%\n", writer.buffered());
 }
 
 test "writeNeighborDistanceHistogramMaxDistance emits expected order 2 report" {
     var buffer: [256]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
+    var writer: std.Io.Writer = .fixed(&buffer);
 
-    try writeNeighborDistanceHistogramMaxDistance(stream.writer(), 2, 4);
+    try writeNeighborDistanceHistogramMaxDistance(&writer, 2, 4);
 
     const expected =
         \\distance=1 count=30 percentage=35.71%
@@ -373,14 +373,14 @@ test "writeNeighborDistanceHistogramMaxDistance emits expected order 2 report" {
         \\
     ;
 
-    try std.testing.expectEqualStrings(expected, stream.getWritten());
+    try std.testing.expectEqualStrings(expected, writer.buffered());
 }
 
 test "writeNeighborDistanceHistogramMaxDistance emits full order 2 report for oversized cutoff" {
     var buffer: [512]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
+    var writer: std.Io.Writer = .fixed(&buffer);
 
-    try writeNeighborDistanceHistogramMaxDistance(stream.writer(), 2, std.math.maxInt(u16));
+    try writeNeighborDistanceHistogramMaxDistance(&writer, 2, std.math.maxInt(u16));
 
     const expected =
         \\distance=1 count=30 percentage=35.71%
@@ -396,14 +396,14 @@ test "writeNeighborDistanceHistogramMaxDistance emits full order 2 report for ov
         \\
     ;
 
-    try std.testing.expectEqualStrings(expected, stream.getWritten());
+    try std.testing.expectEqualStrings(expected, writer.buffered());
 }
 
 test "writeNeighborDistanceHistogramFiltered emits expected order 1 orthogonal report" {
     var buffer: [192]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
+    var writer: std.Io.Writer = .fixed(&buffer);
 
-    try writeNeighborDistanceHistogramFiltered(stream.writer(), 1, .orthogonal, null);
+    try writeNeighborDistanceHistogramFiltered(&writer, 1, .orthogonal, null);
 
     const expected =
         \\distance=1 count=6 percentage=50.00%
@@ -412,14 +412,14 @@ test "writeNeighborDistanceHistogramFiltered emits expected order 1 orthogonal r
         \\
     ;
 
-    try std.testing.expectEqualStrings(expected, stream.getWritten());
+    try std.testing.expectEqualStrings(expected, writer.buffered());
 }
 
 test "writeNeighborDistanceHistogramFiltered emits expected order 1 diagonal report" {
     var buffer: [128]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
+    var writer: std.Io.Writer = .fixed(&buffer);
 
-    try writeNeighborDistanceHistogramFiltered(stream.writer(), 1, .diagonal, null);
+    try writeNeighborDistanceHistogramFiltered(&writer, 1, .diagonal, null);
 
     const expected =
         \\distance=2 count=4 percentage=33.33%
@@ -427,14 +427,14 @@ test "writeNeighborDistanceHistogramFiltered emits expected order 1 diagonal rep
         \\
     ;
 
-    try std.testing.expectEqualStrings(expected, stream.getWritten());
+    try std.testing.expectEqualStrings(expected, writer.buffered());
 }
 
 test "writeNeighborDistanceHistogramFiltered emits explicit kind all summary" {
     var buffer: [192]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
+    var writer: std.Io.Writer = .fixed(&buffer);
 
-    try writeNeighborDistanceHistogramFiltered(stream.writer(), 1, .all, null);
+    try writeNeighborDistanceHistogramFiltered(&writer, 1, .all, null);
 
     const expected =
         \\distance=1 count=6 percentage=50.00%
@@ -444,14 +444,14 @@ test "writeNeighborDistanceHistogramFiltered emits explicit kind all summary" {
         \\
     ;
 
-    try std.testing.expectEqualStrings(expected, stream.getWritten());
+    try std.testing.expectEqualStrings(expected, writer.buffered());
 }
 
 test "writeNeighborDistanceHistogramFiltered emits expected order 2 diagonal max-distance report" {
     var buffer: [192]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
+    var writer: std.Io.Writer = .fixed(&buffer);
 
-    try writeNeighborDistanceHistogramFiltered(stream.writer(), 2, .diagonal, 4);
+    try writeNeighborDistanceHistogramFiltered(&writer, 2, .diagonal, 4);
 
     const expected =
         \\distance=2 count=24 percentage=28.57%
@@ -460,36 +460,36 @@ test "writeNeighborDistanceHistogramFiltered emits expected order 2 diagonal max
         \\
     ;
 
-    try std.testing.expectEqualStrings(expected, stream.getWritten());
+    try std.testing.expectEqualStrings(expected, writer.buffered());
 }
 
 test "writeNeighborDistanceHistogramFiltered emits empty filtered result summary" {
     var buffer: [64]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
+    var writer: std.Io.Writer = .fixed(&buffer);
 
-    try writeNeighborDistanceHistogramFiltered(stream.writer(), 1, .diagonal, 1);
+    try writeNeighborDistanceHistogramFiltered(&writer, 1, .diagonal, 1);
 
-    try std.testing.expectEqualStrings("cumulative_percentage=0.00%\n", stream.getWritten());
+    try std.testing.expectEqualStrings("cumulative_percentage=0.00%\n", writer.buffered());
 }
 
 test "writeNeighborDistanceHistogramFiltered emits order 0 summary" {
     var buffer: [64]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
+    var writer: std.Io.Writer = .fixed(&buffer);
 
-    try writeNeighborDistanceHistogramFiltered(stream.writer(), 0, .orthogonal, null);
+    try writeNeighborDistanceHistogramFiltered(&writer, 0, .orthogonal, null);
 
-    try std.testing.expectEqualStrings("cumulative_percentage=0.00%\n", stream.getWritten());
+    try std.testing.expectEqualStrings("cumulative_percentage=0.00%\n", writer.buffered());
 }
 
 test "writePercentage rounds and zero pads to hundredths" {
     var buffer: [32]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
+    var writer: std.Io.Writer = .fixed(&buffer);
 
-    try writePercentage(stream.writer(), 1, 8);
-    try stream.writer().writeByte(' ');
-    try writePercentage(stream.writer(), 1, 6);
+    try writePercentage(&writer, 1, 8);
+    try writer.writeByte(' ');
+    try writePercentage(&writer, 1, 6);
 
-    try std.testing.expectEqualStrings("12.50% 16.67%", stream.getWritten());
+    try std.testing.expectEqualStrings("12.50% 16.67%", writer.buffered());
 }
 
 test "neighbor distance histogram counts all valid neighbors" {

@@ -122,19 +122,20 @@ fn writeCommand(writer: *std.Io.Writer, command: Command) !void {
     };
 }
 
-pub fn main() !void {
-    var args = std.process.args();
-    const exe_name = args.next() orelse "hilbert_curve";
+pub fn main(init: std.process.Init) !void {
+    const io = init.io;
+    const args = try init.minimal.args.toSlice(init.arena.allocator());
+    const exe_name = if (args.len != 0) args[0] else "hilbert_curve";
 
     var stdout_buffer: [1024]u8 = undefined;
-    var stderr = std.fs.File.stderr().writer(&.{});
-    var stdout = std.fs.File.stdout().writer(&stdout_buffer);
+    var stderr = std.Io.File.stderr().writer(io, &.{});
+    var stdout = std.Io.File.stdout().writer(io, &stdout_buffer);
     const stderr_w = &stderr.interface;
     const stdout_w = &stdout.interface;
 
     var arg_storage: [7][]const u8 = undefined;
     var arg_count: usize = 0;
-    while (args.next()) |arg| {
+    for (args[1..]) |arg| {
         if (arg_count == arg_storage.len) {
             try printUsageAndFlush(stderr_w, exe_name);
             return error.InvalidUsage;
