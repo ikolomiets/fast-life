@@ -307,17 +307,6 @@ fn printUsageAndFlush(writer: *std.Io.Writer, exe_name: []const u8) !void {
     try writer.flush();
 }
 
-fn requiredGridSide(pattern: Pattern) usize {
-    var side: usize = 0;
-
-    for (pattern.live_cells) |cell| {
-        side = @max(side, cell.x + 1);
-        side = @max(side, cell.y + 1);
-    }
-
-    return side;
-}
-
 fn rewritePatternThroughGridOrder(
     comptime grid_order: usize,
     allocator: std.mem.Allocator,
@@ -331,25 +320,6 @@ fn rewritePatternThroughGridOrder(
     };
 
     return extractPattern(allocator, &grid);
-}
-
-fn rewritePatternThroughGrid(
-    allocator: std.mem.Allocator,
-    pattern: Pattern,
-) (std.mem.Allocator.Error || error{ EmptyPattern, PatternTooLargeForBinaryGrid })!Pattern {
-    if (pattern.live_cells.len == 0) {
-        return error.EmptyPattern;
-    }
-
-    const needed_side = requiredGridSide(pattern);
-
-    inline for (0..binary_grid.max_order + 1) |grid_order| {
-        if (needed_side <= binary_grid.BinaryGrid(grid_order).cells_per_side) {
-            return rewritePatternThroughGridOrder(grid_order, allocator, pattern);
-        }
-    }
-
-    return error.PatternTooLargeForBinaryGrid;
 }
 
 const cli_binary_grid_order: usize = 8;
@@ -862,7 +832,7 @@ test "extractPattern and writeGrid reject empty grids" {
     try std.testing.expectError(error.EmptyPattern, writeGrid(&writer, &grid));
 }
 
-test "rewritePatternThroughGrid trims parsed live bounds" {
+test "rewritePatternThroughGridOrder trims parsed live bounds" {
     var pattern = try parsePattern(std.testing.allocator,
         \\x = 6, y = 6
         \\$2bo$3bo$b3o!
@@ -870,7 +840,7 @@ test "rewritePatternThroughGrid trims parsed live bounds" {
     );
     defer pattern.deinit(std.testing.allocator);
 
-    var rewritten = try rewritePatternThroughGrid(std.testing.allocator, pattern);
+    var rewritten = try rewritePatternThroughGridOrder(2, std.testing.allocator, pattern);
     defer rewritten.deinit(std.testing.allocator);
 
     try expectPattern(rewritten, 3, 3, &.{
@@ -880,17 +850,6 @@ test "rewritePatternThroughGrid trims parsed live bounds" {
         .{ .x = 1, .y = 2 },
         .{ .x = 2, .y = 2 },
     });
-}
-
-test "rewritePatternThroughGrid rejects empty patterns" {
-    var pattern = try parsePattern(std.testing.allocator,
-        \\x = 4, y = 3
-        \\!
-        \\
-    );
-    defer pattern.deinit(std.testing.allocator);
-
-    try std.testing.expectError(error.EmptyPattern, rewritePatternThroughGrid(std.testing.allocator, pattern));
 }
 
 test "runCli rewrites an input file through grid extraction" {
