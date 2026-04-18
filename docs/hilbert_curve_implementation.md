@@ -14,7 +14,7 @@ The Zig code lives in:
 - `src/modules/binary_grid.zig` for the built-in packed 4x4 block type and dense binary-grid API
 - `src/modules/hilbert_curve.zig` for the core Hilbert mapping API and inline tests
 - `src/modules/hilbert_neighbors.zig` for neighbor-distance analysis and inline tests
-- `src/main.zig` for the command-line entry point
+- `src/main.zig` for the combined top-level command-line router
 - `build.zig` for build, run, and test integration
 
 The Hilbert implementation is iterative, allocation-free, and close to the standard reference algorithm. This document focuses on the Hilbert mapping and neighbor-reporting modules. For the separate dense binary-grid design built into the same package root, see `docs/binary_grid_design.md`.
@@ -427,7 +427,7 @@ Neighbor lookup is handled by a private `neighborPoint(n, point, dir)` helper in
 
 ## Command-Line Entry Point
 
-`src/main.zig` provides a minimal CLI. It imports the canonical `fast_life` package root and dispatches to `fast_life.hilbert_curve` or `fast_life.hilbert_neighbors`:
+The CLI is split across a thin top-level router in `src/main.zig` and module-owned entry points in `src/modules/hilbert_curve.zig` and `src/modules/hilbert_neighbors.zig`:
 
 ```text
 zig build run -- 2
@@ -453,14 +453,14 @@ Behavior:
 - prints usage again when `order > 8`
 - writes the selected report to stdout
 
-The file uses Zig `0.16.0` process and I/O initialization:
+`src/main.zig`, `src/modules/hilbert_curve.zig`, and `src/modules/hilbert_neighbors.zig` all use Zig `0.16.0` process and I/O initialization for their executable entry points:
 
 - `pub fn main(init: std.process.Init) !void`
 - `init.minimal.args.toSlice(init.arena.allocator())` for CLI args
 - `std.Io.File.stdout().writer(init.io, &buffer)` for buffered curve output
 - `std.Io.File.stderr().writer(init.io, &.{})` for short unbuffered usage messages
 
-The program passes `&writer.interface` into helpers that expect `std.Io.Writer`, then explicitly calls `flush()` before exiting.
+The top-level router strips the `curve` and `neighbors` prefixes before delegating to `hilbert_curve.runCli` and `hilbert_neighbors.runCli`, prints the combined usage text on `error.InvalidUsage` and `error.InvalidOrder`, and explicitly flushes stdout before exiting. Each module also exposes its own standalone `main(init)` entrypoint, so the source files can be executed directly with `zig run`.
 
 ## Performance Characteristics
 
@@ -512,7 +512,7 @@ These tests validate both the generic Hilbert mapping and the repository's publi
 - `zig build run -- <order>` to run the generator
 - `zig build test` to execute the unit tests
 
-It also defines the canonical `fast_life` package import rooted at `src/root.zig`. The executable is named `hilbert_curve`.
+It also defines the canonical `fast_life` package import rooted at `src/root.zig`. The combined executable is named `hilbert_curve`, and the module sources can be run directly as standalone entry points with `zig run src/modules/hilbert_curve.zig -- ...` and `zig run src/modules/hilbert_neighbors.zig -- ...`.
 
 ## Summary
 

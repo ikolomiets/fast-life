@@ -9,7 +9,7 @@ Relevant code:
 - `src/modules/hilbert_curve.zig` contains the core Hilbert types and mapping functions
 - `src/modules/hilbert_neighbors.zig` contains neighbor lookup, histogram logic, and report writers
 - `src/root.zig` re-exports the canonical modules
-- `src/main.zig` exposes the report through the CLI
+- `src/main.zig` exposes the combined CLI, while `src/modules/hilbert_neighbors.zig` also has its own standalone executable entry point
 
 The report walks the Hilbert curve from index `0` through `maxIndex(order)` and, for every visited cell, prints one line describing the Hilbert-curve distance to each of that cell's Moore neighbors.
 
@@ -256,7 +256,7 @@ Mode behavior:
 - `neighbors histogram <order> max-distance <distance>` emits only distances `1..max_distance` and a final cumulative percentage row
 - the two histogram filters may be combined in either order
 
-Argument parsing is handled in `src/main.zig` by `parseCommand`, which selects either curve output or neighbor-distance output before dispatching to the appropriate writer from the canonical `fast_life` package root.
+Neighbor-specific argument parsing is handled in `src/modules/hilbert_neighbors.zig` by `runCli`, which is used both by the standalone module `main(init)` entry point and by the top-level router in `src/main.zig`. `src/main.zig` only routes the top-level mode and prints combined usage text for invalid requests.
 
 ## Tests
 

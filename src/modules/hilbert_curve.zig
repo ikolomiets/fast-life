@@ -129,6 +129,55 @@ pub fn xy2d(order: u8, point: Point) !u16 {
     return xy2dUnchecked(gridSize(order), point);
 }
 
+fn parseCliOrder(arg: []const u8) !u8 {
+    return std.fmt.parseInt(u8, arg, 10) catch error.InvalidUsage;
+}
+
+pub fn appendUsage(writer: *std.Io.Writer, exe_name: []const u8) !void {
+    try writer.print("Usage: {s} <order>\n", .{exe_name});
+    try writer.print("       {s} curve <order>\n", .{exe_name});
+}
+
+fn printUsageAndFlush(writer: *std.Io.Writer, exe_name: []const u8) !void {
+    try appendUsage(writer, exe_name);
+    try writer.flush();
+}
+
+pub fn runCli(writer: *std.Io.Writer, args: []const []const u8) !void {
+    const order = switch (args.len) {
+        1 => try parseCliOrder(args[0]),
+        2 => if (std.mem.eql(u8, args[0], "curve"))
+            try parseCliOrder(args[1])
+        else
+            return error.InvalidUsage,
+        else => return error.InvalidUsage,
+    };
+
+    try writeCurve(writer, order);
+}
+
+pub fn main(init: std.process.Init) !void {
+    const io = init.io;
+    const args = try init.minimal.args.toSlice(init.arena.allocator());
+    const exe_name = if (args.len != 0) args[0] else "hilbert_curve";
+
+    var stdout_buffer: [1024]u8 = undefined;
+    var stderr = std.Io.File.stderr().writer(io, &.{});
+    var stdout = std.Io.File.stdout().writer(io, &stdout_buffer);
+    const stderr_w = &stderr.interface;
+    const stdout_w = &stdout.interface;
+
+    runCli(stdout_w, args[1..]) catch |err| switch (err) {
+        error.InvalidUsage, error.InvalidOrder => {
+            try printUsageAndFlush(stderr_w, exe_name);
+            return err;
+        },
+        else => return err,
+    };
+
+    try stdout_w.flush();
+}
+
 pub fn writeCurve(writer: anytype, order: u8) !void {
     try validateOrder(order);
 
@@ -226,4 +275,43 @@ test "writeCurve emits indexed coordinates" {
     ;
 
     try std.testing.expectEqualStrings(expected, writer.buffered());
+}
+
+test "runCli accepts bare order and explicit curve mode" {
+    var bare_buffer: [32]u8 = undefined;
+    var bare_writer: std.Io.Writer = .fixed(&bare_buffer);
+    var explicit_buffer: [32]u8 = undefined;
+    var explicit_writer: std.Io.Writer = .fixed(&explicit_buffer);
+
+    try runCli(&bare_writer, &.{ "1" });
+    try runCli(&explicit_writer, &.{ "curve", "1" });
+
+    const expected =
+        \\0 0 0
+        \\1 0 1
+        \\2 1 1
+        \\3 1 0
+        \\
+    ;
+
+    try std.testing.expectEqualStrings(expected, bare_writer.buffered());
+    try std.testing.expectEqualStrings(expected, explicit_writer.buffered());
+}
+
+test "runCli rejects malformed curve CLI shapes" {
+    var buffer: [1]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+
+    try std.testing.expectError(error.InvalidUsage, runCli(&writer, &.{}));
+    try std.testing.expectError(error.InvalidUsage, runCli(&writer, &.{ "curve" }));
+    try std.testing.expectError(error.InvalidUsage, runCli(&writer, &.{ "neighbors", "1" }));
+    try std.testing.expectError(error.InvalidUsage, runCli(&writer, &.{ "1", "2" }));
+    try std.testing.expectError(error.InvalidUsage, runCli(&writer, &.{ "foo" }));
+}
+
+test "runCli returns invalid order for out-of-range curve order" {
+    var buffer: [1]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+
+    try std.testing.expectError(error.InvalidOrder, runCli(&writer, &.{ "9" }));
 }
