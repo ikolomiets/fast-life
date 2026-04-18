@@ -1,6 +1,7 @@
 .zig-cache/
 zig-out/
 
+.codex/config.toml
 .DS_Store
 *~
 *.swp

@@ -7,7 +7,7 @@ This document describes the Conway's Game of Life RLE support implemented in thi
 Relevant code:
 
 - `src/root.zig` re-exports the canonical `fast_life.life_rle` module
-- `src/modules/life_rle.zig` contains the RLE parser, encoder, file helpers, grid integration helpers, and inline tests
+- `src/modules/life_rle.zig` contains the RLE parser, encoder, file helpers, grid integration helpers, a standalone CLI entry point, and inline tests
 - `src/modules/binary_grid.zig` provides the `BinaryGrid` and `CellCoord` types that the RLE module integrates with
 
 The module is intentionally narrow. It treats RLE as an I/O format for relative patterns, not as a simulation format, transform library, or placement policy framework.
@@ -91,6 +91,8 @@ pub fn writePatternFile(io: std.Io, path: []const u8, pattern: Pattern) !void
 pub fn extractPattern(allocator: std.mem.Allocator, grid: anytype) (std.mem.Allocator.Error || error{EmptyPattern})!Pattern
 pub fn writeGrid(writer: anytype, grid: anytype) !void
 pub fn applyPattern(grid: anytype, pattern: Pattern, origin: binary_grid.CellCoord) !void
+pub fn runCli(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8) !void
+pub fn main(init: std.process.Init) !void
 ```
 
 The responsibilities are:
@@ -102,6 +104,8 @@ The responsibilities are:
 - `extractPattern` scans a grid and returns the minimal live bounding box as a relative `Pattern`
 - `writeGrid` streams the minimal live bounding box of a grid directly as RLE
 - `applyPattern` overlays a relative pattern onto a grid at an absolute origin
+- `runCli` performs a file-to-file rewrite by parsing input RLE, placing it into a `BinaryGrid`, extracting the trimmed live pattern, and writing canonical output
+- `main` exposes that rewrite flow as a standalone executable entry point for `zig run src/modules/life_rle.zig -- <input> <output>`
 
 ## Parsing Behavior
 
@@ -182,6 +186,31 @@ error.EmptyPattern
 
 It also returns `error.EmptyPattern` for an all-dead grid.
 
+## Command-Line Entry Point
+
+`src/modules/life_rle.zig` also exposes a standalone executable entry point:
+
+```text
+zig run src/modules/life_rle.zig -- <input-rle-path> <output-rle-path>
+```
+
+The command flow is:
+
+1. parse the input file with `parsePatternFile`
+2. reject the input if the declared pattern bounds exceed `BinaryGrid(8).cells_per_side`, which is `1024`
+3. place the parsed live cells into `BinaryGrid(8)`
+4. call `extractPattern` on that grid
+5. write the extracted pattern with `writePatternFile`
+
+This means the output is always the trimmed live bounding box in the module's canonical RLE form.
+
+CLI-specific behavior:
+
+- invalid argument count returns `error.InvalidUsage` and prints usage to stderr
+- input whose declared `width` or `height` exceeds `1024` returns `error.PatternTooLargeForBinaryGrid`
+- input with no live cells and declared bounds within `1024 x 1024` returns `error.EmptyPattern`, because the intermediate grid has no live bounding box to extract
+- input and output paths are interpreted through `std.Io.Dir.cwd()`, matching the file helper APIs
+
 ### Pattern Application
 
 `applyPattern` takes a relative `Pattern` plus an absolute `binary_grid.CellCoord` origin.
@@ -208,7 +237,7 @@ This module intentionally does not provide:
 - rotation, reflection, or translation helpers
 - rule persistence in `Pattern`
 - comment preservation in `Pattern`
-- CLI wrappers
+- top-level integration with the combined Hilbert CLI in `src/main.zig`
 
 Those concerns stay outside the current RLE layer.
 
@@ -227,6 +256,7 @@ The inline tests in `src/modules/life_rle.zig` and `src/root.zig` cover:
 - direct grid encoding
 - overlay application and out-of-bounds failure
 - empty-grid rejection
+- file-to-file CLI rewrite behavior
 - package-root re-export coverage
 
 Run the suite with:

@@ -297,6 +297,64 @@ fn writeGridRow(writer: anytype, grid: anytype, min_x: usize, row_y: usize, max_
     }
 }
 
+fn printUsage(writer: *std.Io.Writer, exe_name: []const u8) !void {
+    try writer.print("Usage: {s} <input-rle-path> <output-rle-path>\n", .{exe_name});
+    try writer.writeAll("Parse a Life RLE file into a BinaryGrid, extract the trimmed live pattern, and write canonical RLE output.\n");
+}
+
+fn printUsageAndFlush(writer: *std.Io.Writer, exe_name: []const u8) !void {
+    try printUsage(writer, exe_name);
+    try writer.flush();
+}
+
+fn requiredGridSide(pattern: Pattern) usize {
+    var side: usize = 0;
+
+    for (pattern.live_cells) |cell| {
+        side = @max(side, cell.x + 1);
+        side = @max(side, cell.y + 1);
+    }
+
+    return side;
+}
+
+fn rewritePatternThroughGridOrder(
+    comptime grid_order: usize,
+    allocator: std.mem.Allocator,
+    pattern: Pattern,
+) (std.mem.Allocator.Error || error{EmptyPattern})!Pattern {
+    const Grid = binary_grid.BinaryGrid(grid_order);
+    var grid = Grid.initEmpty();
+
+    applyPattern(&grid, pattern, .{ .x = 0, .y = 0 }) catch |err| switch (err) {
+        error.InvalidPattern, error.PatternOutOfRange => unreachable,
+    };
+
+    return extractPattern(allocator, &grid);
+}
+
+fn rewritePatternThroughGrid(
+    allocator: std.mem.Allocator,
+    pattern: Pattern,
+) (std.mem.Allocator.Error || error{ EmptyPattern, PatternTooLargeForBinaryGrid })!Pattern {
+    if (pattern.live_cells.len == 0) {
+        return error.EmptyPattern;
+    }
+
+    const needed_side = requiredGridSide(pattern);
+
+    inline for (0..binary_grid.max_order + 1) |grid_order| {
+        if (needed_side <= binary_grid.BinaryGrid(grid_order).cells_per_side) {
+            return rewritePatternThroughGridOrder(grid_order, allocator, pattern);
+        }
+    }
+
+    return error.PatternTooLargeForBinaryGrid;
+}
+
+const cli_binary_grid_order: usize = 8;
+const cli_binary_grid_side: usize = binary_grid.BinaryGrid(cli_binary_grid_order).cells_per_side;
+
 pub fn parsePattern(allocator: std.mem.Allocator, input: []const u8) ParseError!Pattern {
     var lines = std.mem.splitScalar(u8, input, '\n');
     var header: ?Header = null;
@@ -461,6 +519,42 @@ pub fn applyPattern(grid: anytype, pattern: Pattern, origin: binary_grid.CellCoo
             .y = origin.y + cell.y,
         }, true);
     }
+}
+
+pub fn runCli(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8) !void {
+    if (args.len != 2) {
+        return error.InvalidUsage;
+    }
+
+    var input_pattern = try parsePatternFile(io, allocator, args[0]);
+    defer input_pattern.deinit(allocator);
+
+    if (input_pattern.width > cli_binary_grid_side or input_pattern.height > cli_binary_grid_side) {
+        return error.PatternTooLargeForBinaryGrid;
+    }
+
+    var output_pattern = try rewritePatternThroughGridOrder(cli_binary_grid_order, allocator, input_pattern);
+    defer output_pattern.deinit(allocator);
+
+    try writePatternFile(io, args[1], output_pattern);
+}
+
+pub fn main(init: std.process.Init) !void {
+    const io = init.io;
+    const allocator = init.arena.allocator();
+    const args = try init.minimal.args.toSlice(allocator);
+    const exe_name = if (args.len != 0) args[0] else "life_rle";
+
+    var stderr = std.Io.File.stderr().writer(io, &.{});
+    const stderr_w = &stderr.interface;
+
+    runCli(io, allocator, args[1..]) catch |err| switch (err) {
+        error.InvalidUsage => {
+            try printUsageAndFlush(stderr_w, exe_name);
+            return err;
+        },
+        else => return err,
+    };
 }
 
 fn expectPattern(pattern: Pattern, width: usize, height: usize, expected_cells: []const PatternCell) !void {
@@ -766,4 +860,185 @@ test "extractPattern and writeGrid reject empty grids" {
     var buffer: [64]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
     try std.testing.expectError(error.EmptyPattern, writeGrid(&writer, &grid));
+}
+
+test "rewritePatternThroughGrid trims parsed live bounds" {
+    var pattern = try parsePattern(std.testing.allocator,
+        \\x = 6, y = 6
+        \\$2bo$3bo$b3o!
+        \\
+    );
+    defer pattern.deinit(std.testing.allocator);
+
+    var rewritten = try rewritePatternThroughGrid(std.testing.allocator, pattern);
+    defer rewritten.deinit(std.testing.allocator);
+
+    try expectPattern(rewritten, 3, 3, &.{
+        .{ .x = 1, .y = 0 },
+        .{ .x = 2, .y = 1 },
+        .{ .x = 0, .y = 2 },
+        .{ .x = 1, .y = 2 },
+        .{ .x = 2, .y = 2 },
+    });
+}
+
+test "rewritePatternThroughGrid rejects empty patterns" {
+    var pattern = try parsePattern(std.testing.allocator,
+        \\x = 4, y = 3
+        \\!
+        \\
+    );
+    defer pattern.deinit(std.testing.allocator);
+
+    try std.testing.expectError(error.EmptyPattern, rewritePatternThroughGrid(std.testing.allocator, pattern));
+}
+
+test "runCli rewrites an input file through grid extraction" {
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "input.rle",
+        .data =
+        \\x = 6, y = 6
+        \\$2bo$3bo$b3o!
+        \\
+        ,
+    });
+
+    var input_path_buffer: [128]u8 = undefined;
+    const input_path = try tmpFilePath(&input_path_buffer, &tmp_dir, "input.rle");
+    var output_path_buffer: [128]u8 = undefined;
+    const output_path = try tmpFilePath(&output_path_buffer, &tmp_dir, "output.rle");
+
+    try runCli(std.testing.io, std.testing.allocator, &.{ input_path, output_path });
+
+    const written = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, output_path, std.testing.allocator, .limited(max_pattern_file_bytes));
+    defer std.testing.allocator.free(written);
+
+    try std.testing.expectEqualStrings(
+        \\x = 3, y = 3
+        \\bo$2bo$3o!
+        \\
+    , written);
+}
+
+test "runCli rejects declared width larger than the fixed grid side" {
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "too_wide.rle",
+        .data =
+        \\x = 1025, y = 1
+        \\o!
+        \\
+        ,
+    });
+
+    var input_path_buffer: [128]u8 = undefined;
+    const input_path = try tmpFilePath(&input_path_buffer, &tmp_dir, "too_wide.rle");
+    var output_path_buffer: [128]u8 = undefined;
+    const output_path = try tmpFilePath(&output_path_buffer, &tmp_dir, "output.rle");
+
+    try std.testing.expectError(error.PatternTooLargeForBinaryGrid, runCli(std.testing.io, std.testing.allocator, &.{ input_path, output_path }));
+}
+
+test "runCli rejects declared height larger than the fixed grid side" {
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "too_tall.rle",
+        .data =
+        \\x = 1, y = 1025
+        \\o!
+        \\
+        ,
+    });
+
+    var input_path_buffer: [128]u8 = undefined;
+    const input_path = try tmpFilePath(&input_path_buffer, &tmp_dir, "too_tall.rle");
+    var output_path_buffer: [128]u8 = undefined;
+    const output_path = try tmpFilePath(&output_path_buffer, &tmp_dir, "output.rle");
+
+    try std.testing.expectError(error.PatternTooLargeForBinaryGrid, runCli(std.testing.io, std.testing.allocator, &.{ input_path, output_path }));
+}
+
+test "runCli accepts declared bounds exactly matching the fixed grid side" {
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "edge_ok.rle",
+        .data =
+        \\x = 1024, y = 1024
+        \\o!
+        \\
+        ,
+    });
+
+    var input_path_buffer: [128]u8 = undefined;
+    const input_path = try tmpFilePath(&input_path_buffer, &tmp_dir, "edge_ok.rle");
+    var output_path_buffer: [128]u8 = undefined;
+    const output_path = try tmpFilePath(&output_path_buffer, &tmp_dir, "output.rle");
+
+    try runCli(std.testing.io, std.testing.allocator, &.{ input_path, output_path });
+
+    const written = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, output_path, std.testing.allocator, .limited(max_pattern_file_bytes));
+    defer std.testing.allocator.free(written);
+
+    try std.testing.expectEqualStrings(
+        \\x = 1, y = 1
+        \\o!
+        \\
+    , written);
+}
+
+test "runCli rejects oversized empty patterns before empty-grid extraction" {
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "oversized_empty.rle",
+        .data =
+        \\x = 1025, y = 1
+        \\!
+        \\
+        ,
+    });
+
+    var input_path_buffer: [128]u8 = undefined;
+    const input_path = try tmpFilePath(&input_path_buffer, &tmp_dir, "oversized_empty.rle");
+    var output_path_buffer: [128]u8 = undefined;
+    const output_path = try tmpFilePath(&output_path_buffer, &tmp_dir, "output.rle");
+
+    try std.testing.expectError(error.PatternTooLargeForBinaryGrid, runCli(std.testing.io, std.testing.allocator, &.{ input_path, output_path }));
+}
+
+test "runCli keeps empty in-bounds patterns as empty-grid errors" {
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "empty_ok.rle",
+        .data =
+        \\x = 1024, y = 1024
+        \\!
+        \\
+        ,
+    });
+
+    var input_path_buffer: [128]u8 = undefined;
+    const input_path = try tmpFilePath(&input_path_buffer, &tmp_dir, "empty_ok.rle");
+    var output_path_buffer: [128]u8 = undefined;
+    const output_path = try tmpFilePath(&output_path_buffer, &tmp_dir, "output.rle");
+
+    try std.testing.expectError(error.EmptyPattern, runCli(std.testing.io, std.testing.allocator, &.{ input_path, output_path }));
+}
+
+test "runCli rejects invalid argument counts" {
+    try std.testing.expectError(error.InvalidUsage, runCli(std.testing.io, std.testing.allocator, &.{}));
+    try std.testing.expectError(error.InvalidUsage, runCli(std.testing.io, std.testing.allocator, &.{ "input.rle" }));
+    try std.testing.expectError(error.InvalidUsage, runCli(std.testing.io, std.testing.allocator, &.{ "in.rle", "out.rle", "extra" }));
 }

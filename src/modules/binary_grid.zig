@@ -1,5 +1,7 @@
 const std = @import("std");
 
+pub const max_order: usize = 12;
+
 pub const Block = struct {
     bits: u16,
 
@@ -75,9 +77,8 @@ fn sliceOfBlocks(comptime GridPtr: type) type {
 
 pub fn BinaryGrid(comptime grid_order: usize) type {
     const Shift = std.math.Log2Int(usize);
-    const max_order: usize = 12;
     if (grid_order > max_order) {
-        @compileError("BinaryGrid order must be <= 12");
+        @compileError(std.fmt.comptimePrint("BinaryGrid order must be <= {d}", .{max_order}));
     }
     const order_shift: Shift = @intCast(grid_order);
 
@@ -313,7 +314,7 @@ test "BinaryGrid derives sizes from order" {
     try std.testing.expectEqual(@as(usize, 1), BinaryGrid(0).blocks_per_side);
     try std.testing.expectEqual(@as(usize, 4), BinaryGrid(2).blocks_per_side);
     try std.testing.expectEqual(@as(usize, 8), BinaryGrid(3).blocks_per_side);
-    try std.testing.expectEqual(@as(usize, 4096), BinaryGrid(12).blocks_per_side);
+    try std.testing.expectEqual(@as(usize, 4096), BinaryGrid(max_order).blocks_per_side);
 }
 
 test "BinaryGrid maps block coordinates and indices" {
