@@ -7,8 +7,25 @@ pub const NeighborKind = enum {
     diagonal,
 };
 
+pub const max_order: u8 = 8;
+
 const directions = [_]hilbert_curve.Direction{ .N, .NE, .E, .SE, .S, .SW, .W, .NW };
+// Order 8 is the largest grid that keeps every Hilbert distance in u16 and the histogram fixed-size.
 const histogram_bins = @as(usize, std.math.maxInt(u16)) + 1;
+
+comptime {
+    const grid_shift: u5 = @intCast(max_order);
+    const distance_shift: u5 = @intCast(max_order * 2);
+    const max_grid_side = @as(u32, 1) << grid_shift;
+    const max_index_for_max_order = (@as(u32, 1) << distance_shift) - 1;
+
+    if (max_grid_side > std.math.maxInt(u16)) {
+        @compileError("hilbert_neighbors.max_order must keep grid_size(max_order) within u16");
+    }
+    if (max_index_for_max_order > std.math.maxInt(u16)) {
+        @compileError("hilbert_neighbors.max_order must keep max_index(max_order) within u16");
+    }
+}
 
 const HistogramEntry = struct {
     distance: u16,
@@ -16,7 +33,7 @@ const HistogramEntry = struct {
 };
 
 const HistogramSummary = struct {
-    all_total_count: u32,
+    directed_neighbor_count_total: u32,
     entry_count: usize,
 };
 
@@ -33,11 +50,11 @@ const Command = struct {
     max_distance: ?u16 = null,
 };
 
-fn writePercentageHundredths(writer: anytype, hundredths: u32) !void {
+fn write_percentage_hundredths(writer: anytype, hundredths: u32) !void {
     try writer.print("{d}.{d:0>2}%", .{ @divFloor(hundredths, 100), hundredths % 100 });
 }
 
-fn percentageHundredths(count: u32, total_count: u32) u32 {
+fn percentage_hundredths(count: u32, total_count: u32) u32 {
     std.debug.assert(total_count != 0);
 
     const scaled_count: u64 = @as(u64, count) * 10_000;
@@ -45,35 +62,51 @@ fn percentageHundredths(count: u32, total_count: u32) u32 {
     return @intCast(@divFloor(rounded, total_count));
 }
 
-fn writePercentage(writer: anytype, count: u32, total_count: u32) !void {
-    try writePercentageHundredths(writer, percentageHundredths(count, total_count));
+fn write_percentage(writer: anytype, count: u32, total_count: u32) !void {
+    try write_percentage_hundredths(writer, percentage_hundredths(count, total_count));
 }
 
-fn percentageHundredthsOrZero(count: u32, total_count: u32) u32 {
-    return if (total_count == 0) 0 else percentageHundredths(count, total_count);
+fn percentage_hundredths_or_zero(count: u32, total_count: u32) u32 {
+    return if (total_count == 0) 0 else percentage_hundredths(count, total_count);
 }
 
-fn parseOrder(arg: []const u8) !u8 {
+fn parse_order(arg: []const u8) !u8 {
     return std.fmt.parseInt(u8, arg, 10) catch error.InvalidUsage;
 }
 
-fn parseMaxDistance(arg: []const u8) !u16 {
+fn parse_max_distance(arg: []const u8) !u16 {
     return std.fmt.parseInt(u16, arg, 10) catch error.InvalidUsage;
 }
 
-fn parseNeighborKind(arg: []const u8) !NeighborKind {
+fn parse_neighbor_kind(arg: []const u8) !NeighborKind {
     if (std.mem.eql(u8, arg, "all")) return .all;
     if (std.mem.eql(u8, arg, "orthogonal")) return .orthogonal;
     if (std.mem.eql(u8, arg, "diagonal")) return .diagonal;
     return error.InvalidUsage;
 }
 
-fn parseHistogramCommand(args: []const []const u8) !Command {
+fn apply_histogram_option(command: *Command, option: []const u8, value: []const u8) !void {
+    if (std.mem.eql(u8, option, "kind")) {
+        if (command.kind_explicit) return error.InvalidUsage;
+        command.kind = try parse_neighbor_kind(value);
+        command.kind_explicit = true;
+        return;
+    }
+    if (std.mem.eql(u8, option, "max-distance")) {
+        if (command.max_distance != null) return error.InvalidUsage;
+        command.max_distance = try parse_max_distance(value);
+        return;
+    }
+
+    return error.InvalidUsage;
+}
+
+fn parse_histogram_command(args: []const []const u8) !Command {
     if (args.len < 2) return error.InvalidUsage;
 
     var command = Command{
         .mode = .histogram,
-        .order = try parseOrder(args[1]),
+        .order = try parse_order(args[1]),
     };
 
     const option_count = args.len - 2;
@@ -85,48 +118,47 @@ fn parseHistogramCommand(args: []const []const u8) !Command {
     while (i < args.len) : (i += 2) {
         const option = args[i];
         const value = args[i + 1];
-
-        if (std.mem.eql(u8, option, "kind")) {
-            if (command.kind_explicit) return error.InvalidUsage;
-            command.kind = try parseNeighborKind(value);
-            command.kind_explicit = true;
-        } else if (std.mem.eql(u8, option, "max-distance")) {
-            if (command.max_distance != null) return error.InvalidUsage;
-            command.max_distance = try parseMaxDistance(value);
-        } else {
-            return error.InvalidUsage;
-        }
+        try apply_histogram_option(&command, option, value);
     }
 
     return command;
 }
 
-fn parseCommand(args: []const []const u8) !Command {
+fn parse_command(args: []const []const u8) !Command {
     if (args.len >= 1 and std.mem.eql(u8, args[0], "histogram")) {
-        return parseHistogramCommand(args);
+        return parse_histogram_command(args);
     }
 
     if (args.len == 1) {
         return .{
             .mode = .neighbors,
-            .order = try parseOrder(args[0]),
+            .order = try parse_order(args[0]),
         };
     }
 
     return error.InvalidUsage;
 }
 
-fn writeCommand(writer: *std.Io.Writer, command: Command) !void {
-    return switch (command.mode) {
-        .neighbors => writeNeighborDistances(writer, command.order),
-        .histogram => if (command.kind_explicit or command.max_distance != null)
-            writeNeighborDistanceHistogramFiltered(writer, command.order, command.kind, command.max_distance)
-        else
-            writeNeighborDistanceHistogram(writer, command.order),
-    };
+fn write_command(writer: *std.Io.Writer, command: Command) !void {
+    switch (command.mode) {
+        .neighbors => try write_neighbor_distances(writer, command.order),
+        .histogram => {
+            if (command.kind_explicit or command.max_distance != null) {
+                try write_neighbor_distance_histogram_filtered(
+                    writer,
+                    command.order,
+                    command.kind,
+                    command.max_distance,
+                );
+                return;
+            }
+
+            try write_neighbor_distance_histogram(writer, command.order);
+        },
+    }
 }
 
-pub fn appendUsage(writer: *std.Io.Writer, exe_name: []const u8) !void {
+pub fn append_usage(writer: *std.Io.Writer, exe_name: []const u8) !void {
     try writer.print("       {s} neighbors <order>\n", .{exe_name});
     try writer.print("       {s} neighbors histogram <order>\n", .{exe_name});
     try writer.print("       {s} neighbors histogram <order> kind <all|orthogonal|diagonal>\n", .{exe_name});
@@ -135,7 +167,7 @@ pub fn appendUsage(writer: *std.Io.Writer, exe_name: []const u8) !void {
     try writer.print("       {s} neighbors histogram <order> max-distance <distance> kind <all|orthogonal|diagonal>\n", .{exe_name});
 }
 
-fn printStandaloneUsage(writer: *std.Io.Writer, exe_name: []const u8) !void {
+fn print_standalone_usage(writer: *std.Io.Writer, exe_name: []const u8) !void {
     try writer.print("Usage: {s} <order>\n", .{exe_name});
     try writer.print("       {s} histogram <order>\n", .{exe_name});
     try writer.print("       {s} histogram <order> kind <all|orthogonal|diagonal>\n", .{exe_name});
@@ -145,14 +177,14 @@ fn printStandaloneUsage(writer: *std.Io.Writer, exe_name: []const u8) !void {
     try writer.writeAll("Generate Moore-neighbor distances or a neighbor-distance histogram for order 0 through 8.\n");
 }
 
-fn printStandaloneUsageAndFlush(writer: *std.Io.Writer, exe_name: []const u8) !void {
-    try printStandaloneUsage(writer, exe_name);
+fn print_standalone_usage_and_flush(writer: *std.Io.Writer, exe_name: []const u8) !void {
+    try print_standalone_usage(writer, exe_name);
     try writer.flush();
 }
 
-pub fn runCli(writer: *std.Io.Writer, args: []const []const u8) !void {
-    const command = try parseCommand(args);
-    try writeCommand(writer, command);
+pub fn run_cli(writer: *std.Io.Writer, args: []const []const u8) !void {
+    const command = try parse_command(args);
+    try write_command(writer, command);
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -166,9 +198,9 @@ pub fn main(init: std.process.Init) !void {
     const stderr_w = &stderr.interface;
     const stdout_w = &stdout.interface;
 
-    runCli(stdout_w, args[1..]) catch |err| switch (err) {
+    run_cli(stdout_w, args[1..]) catch |err| switch (err) {
         error.InvalidUsage, error.InvalidOrder => {
-            try printStandaloneUsageAndFlush(stderr_w, exe_name);
+            try print_standalone_usage_and_flush(stderr_w, exe_name);
             return err;
         },
         else => return err,
@@ -177,59 +209,69 @@ pub fn main(init: std.process.Init) !void {
     try stdout_w.flush();
 }
 
-fn validateOrder(order: u8) !void {
-    if (order > hilbert_curve.max_order) {
+fn validate_order(order: u8) !void {
+    if (order > max_order) {
         return error.InvalidOrder;
     }
 }
 
-fn gridSize(order: u8) u16 {
+fn grid_size(order: u8) u16 {
+    std.debug.assert(order <= max_order);
     const shift: u4 = @intCast(order);
     return @as(u16, 1) << shift;
 }
 
-fn maxIndex(order: u8) u16 {
-    return switch (order) {
-        hilbert_curve.max_order => std.math.maxInt(u16),
-        else => (@as(u16, 1) << @intCast(order * 2)) - 1,
-    };
+fn max_index(order: u8) u16 {
+    std.debug.assert(order <= max_order);
+    const shift: u5 = @intCast(order * 2);
+    const max_index_u32 = (@as(u32, 1) << shift) - 1;
+    return @intCast(max_index_u32);
 }
 
-fn neighborPoint(n: u16, point: hilbert_curve.Point, dir: hilbert_curve.Direction) ?hilbert_curve.Point {
-    const Candidate = struct {
-        x: i32,
-        y: i32,
-    };
+fn neighbor_point(n: u16, point: hilbert_curve.Point, dir: hilbert_curve.Direction) ?hilbert_curve.Point {
+    var neighbor_x: i32 = point.x;
+    var neighbor_y: i32 = point.y;
 
-    const x: i32 = point.x;
-    const y: i32 = point.y;
-    const candidate: Candidate = switch (dir) {
-        .N => .{ .x = x, .y = y - 1 },
-        .NE => .{ .x = x + 1, .y = y - 1 },
-        .E => .{ .x = x + 1, .y = y },
-        .SE => .{ .x = x + 1, .y = y + 1 },
-        .S => .{ .x = x, .y = y + 1 },
-        .SW => .{ .x = x - 1, .y = y + 1 },
-        .W => .{ .x = x - 1, .y = y },
-        .NW => .{ .x = x - 1, .y = y - 1 },
-    };
-    const limit: i32 = @intCast(n);
-
-    if (candidate.x < 0 or candidate.y < 0 or candidate.x >= limit or candidate.y >= limit) {
-        return null;
+    switch (dir) {
+        .N => neighbor_y -= 1,
+        .NE => {
+            neighbor_x += 1;
+            neighbor_y -= 1;
+        },
+        .E => neighbor_x += 1,
+        .SE => {
+            neighbor_x += 1;
+            neighbor_y += 1;
+        },
+        .S => neighbor_y += 1,
+        .SW => {
+            neighbor_x -= 1;
+            neighbor_y += 1;
+        },
+        .W => neighbor_x -= 1,
+        .NW => {
+            neighbor_x -= 1;
+            neighbor_y -= 1;
+        },
     }
 
+    const limit: i32 = @intCast(n);
+    if (neighbor_x < 0) return null;
+    if (neighbor_y < 0) return null;
+    if (neighbor_x >= limit) return null;
+    if (neighbor_y >= limit) return null;
+
     return .{
-        .x = @intCast(candidate.x),
-        .y = @intCast(candidate.y),
+        .x = @intCast(neighbor_x),
+        .y = @intCast(neighbor_y),
     };
 }
 
-fn indexDistance(a: u16, b: u16) u16 {
+fn index_distance(a: u16, b: u16) u16 {
     return if (a > b) a - b else b - a;
 }
 
-fn directionMatchesKind(kind: NeighborKind, dir: hilbert_curve.Direction) bool {
+fn direction_matches_kind(kind: NeighborKind, dir: hilbert_curve.Direction) bool {
     return switch (kind) {
         .all => true,
         .orthogonal => switch (dir) {
@@ -243,27 +285,27 @@ fn directionMatchesKind(kind: NeighborKind, dir: hilbert_curve.Direction) bool {
     };
 }
 
-fn fillNeighborDistanceCounts(order: u8, kind: NeighborKind, counts: *[histogram_bins]u32) !u32 {
-    try validateOrder(order);
+fn fill_neighbor_distance_counts(order: u8, kind: NeighborKind, counts: *[histogram_bins]u32) !u32 {
+    try validate_order(order);
 
     @memset(counts[0..], 0);
 
-    const n = gridSize(order);
-    const end = maxIndex(order);
-    var all_total_count: u32 = 0;
+    const n = grid_size(order);
+    const end = max_index(order);
+    var directed_neighbor_count_total: u32 = 0;
     var d: u16 = 0;
     while (true) {
         const point = try hilbert_curve.d2xy(order, d);
 
         for (directions) |dir| {
-            if (neighborPoint(n, point, dir)) |neighbor| {
-                all_total_count += 1;
-                if (!directionMatchesKind(kind, dir)) {
+            if (neighbor_point(n, point, dir)) |neighbor| {
+                directed_neighbor_count_total += 1;
+                if (!direction_matches_kind(kind, dir)) {
                     continue;
                 }
 
                 const neighbor_d = try hilbert_curve.xy2d(order, neighbor);
-                const distance = indexDistance(d, neighbor_d);
+                const distance = index_distance(d, neighbor_d);
                 counts[@intCast(distance)] += 1;
             }
         }
@@ -272,16 +314,16 @@ fn fillNeighborDistanceCounts(order: u8, kind: NeighborKind, counts: *[histogram
         d += 1;
     }
 
-    return all_total_count;
+    return directed_neighbor_count_total;
 }
 
-fn histogramEntryLessThan(_: void, lhs: HistogramEntry, rhs: HistogramEntry) bool {
-    return lhs.distance < rhs.distance;
-}
-
-fn buildNeighborDistanceHistogram(order: u8, kind: NeighborKind, entries: *[histogram_bins]HistogramEntry) !HistogramSummary {
+fn build_neighbor_distance_histogram(
+    order: u8,
+    kind: NeighborKind,
+    entries: *[histogram_bins]HistogramEntry,
+) !HistogramSummary {
     var counts: [histogram_bins]u32 = [_]u32{0} ** histogram_bins;
-    const all_total_count = try fillNeighborDistanceCounts(order, kind, &counts);
+    const directed_neighbor_count_total = try fill_neighbor_distance_counts(order, kind, &counts);
 
     var entry_count: usize = 0;
     for (counts[1..], 1..) |count, distance| {
@@ -294,25 +336,27 @@ fn buildNeighborDistanceHistogram(order: u8, kind: NeighborKind, entries: *[hist
         entry_count += 1;
     }
 
-    std.mem.sort(HistogramEntry, entries[0..entry_count], {}, histogramEntryLessThan);
-
     return .{
-        .all_total_count = all_total_count,
+        .directed_neighbor_count_total = directed_neighbor_count_total,
         .entry_count = entry_count,
     };
 }
 
-fn writeNeighborDistanceHistogramEntry(writer: anytype, entry: HistogramEntry, all_total_count: u32) !void {
+fn write_neighbor_distance_histogram_entry(
+    writer: anytype,
+    entry: HistogramEntry,
+    directed_neighbor_count_total: u32,
+) !void {
     try writer.print("distance={d} count={d} percentage=", .{ entry.distance, entry.count });
-    try writePercentage(writer, entry.count, all_total_count);
+    try write_percentage(writer, entry.count, directed_neighbor_count_total);
     try writer.writeByte('\n');
 }
 
-pub fn writeNeighborDistances(writer: anytype, order: u8) !void {
-    try validateOrder(order);
+pub fn write_neighbor_distances(writer: anytype, order: u8) !void {
+    try validate_order(order);
 
-    const n = gridSize(order);
-    const end = maxIndex(order);
+    const n = grid_size(order);
+    const end = max_index(order);
     var d: u16 = 0;
     while (true) {
         const point = try hilbert_curve.d2xy(order, d);
@@ -320,9 +364,9 @@ pub fn writeNeighborDistances(writer: anytype, order: u8) !void {
 
         for (directions) |dir| {
             try writer.print(" {s}=", .{@tagName(dir)});
-            if (neighborPoint(n, point, dir)) |neighbor| {
+            if (neighbor_point(n, point, dir)) |neighbor| {
                 const neighbor_d = try hilbert_curve.xy2d(order, neighbor);
-                try writer.print("{d}", .{indexDistance(d, neighbor_d)});
+                try writer.print("{d}", .{index_distance(d, neighbor_d)});
             } else {
                 try writer.writeAll("-");
             }
@@ -334,26 +378,39 @@ pub fn writeNeighborDistances(writer: anytype, order: u8) !void {
     }
 }
 
-pub fn writeNeighborDistanceHistogram(writer: anytype, order: u8) !void {
-    try validateOrder(order);
+pub fn write_neighbor_distance_histogram(writer: anytype, order: u8) !void {
+    try validate_order(order);
 
     var entries: [histogram_bins]HistogramEntry = undefined;
-    const summary = try buildNeighborDistanceHistogram(order, .all, &entries);
+    const summary = try build_neighbor_distance_histogram(order, .all, &entries);
 
     for (entries[0..summary.entry_count]) |entry| {
-        try writeNeighborDistanceHistogramEntry(writer, entry, summary.all_total_count);
+        try write_neighbor_distance_histogram_entry(
+            writer,
+            entry,
+            summary.directed_neighbor_count_total,
+        );
     }
 }
 
-pub fn writeNeighborDistanceHistogramMaxDistance(writer: anytype, order: u8, max_distance: u16) !void {
-    return writeNeighborDistanceHistogramFiltered(writer, order, .all, max_distance);
+pub fn write_neighbor_distance_histogram_max_distance(
+    writer: anytype,
+    order: u8,
+    max_distance: u16,
+) !void {
+    return write_neighbor_distance_histogram_filtered(writer, order, .all, max_distance);
 }
 
-pub fn writeNeighborDistanceHistogramFiltered(writer: anytype, order: u8, kind: NeighborKind, max_distance: ?u16) !void {
-    try validateOrder(order);
+pub fn write_neighbor_distance_histogram_filtered(
+    writer: anytype,
+    order: u8,
+    kind: NeighborKind,
+    max_distance: ?u16,
+) !void {
+    try validate_order(order);
 
     var entries: [histogram_bins]HistogramEntry = undefined;
-    const summary = try buildNeighborDistanceHistogram(order, kind, &entries);
+    const summary = try build_neighbor_distance_histogram(order, kind, &entries);
 
     var subtotal_count: u32 = 0;
     for (entries[0..summary.entry_count]) |entry| {
@@ -361,20 +418,27 @@ pub fn writeNeighborDistanceHistogramFiltered(writer: anytype, order: u8, kind: 
             if (entry.distance > limit) break;
         }
 
-        try writeNeighborDistanceHistogramEntry(writer, entry, summary.all_total_count);
+        try write_neighbor_distance_histogram_entry(
+            writer,
+            entry,
+            summary.directed_neighbor_count_total,
+        );
         subtotal_count += entry.count;
     }
 
     try writer.writeAll("cumulative_percentage=");
-    try writePercentageHundredths(writer, percentageHundredthsOrZero(subtotal_count, summary.all_total_count));
+    try write_percentage_hundredths(
+        writer,
+        percentage_hundredths_or_zero(subtotal_count, summary.directed_neighbor_count_total),
+    );
     try writer.writeByte('\n');
 }
 
-test "writeNeighborDistances emits expected order 0 report" {
+test "write_neighbor_distances emits expected order 0 report" {
     var buffer: [128]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
 
-    try writeNeighborDistances(&writer, 0);
+    try write_neighbor_distances(&writer, 0);
 
     const expected =
         \\d=0 pos=(0,0) N=- NE=- E=- SE=- S=- SW=- W=- NW=-
@@ -384,11 +448,11 @@ test "writeNeighborDistances emits expected order 0 report" {
     try std.testing.expectEqualStrings(expected, writer.buffered());
 }
 
-test "writeNeighborDistances emits expected order 1 report" {
+test "write_neighbor_distances emits expected order 1 report" {
     var buffer: [512]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
 
-    try writeNeighborDistances(&writer, 1);
+    try write_neighbor_distances(&writer, 1);
 
     const expected =
         \\d=0 pos=(0,0) N=- NE=- E=3 SE=2 S=1 SW=- W=- NW=-
@@ -403,9 +467,9 @@ test "writeNeighborDistances emits expected order 1 report" {
 
 test "neighbor distances are correct for all points and directions" {
     var order: u8 = 0;
-    while (order <= hilbert_curve.max_order) : (order += 1) {
-        const n = gridSize(order);
-        const end = maxIndex(order);
+    while (order <= max_order) : (order += 1) {
+        const n = grid_size(order);
+        const end = max_index(order);
 
         var d: u16 = 0;
         while (true) {
@@ -423,12 +487,15 @@ test "neighbor distances are correct for all points and directions" {
                     .NW => point.x > 0 and point.y > 0,
                 };
 
-                const neighbor = neighborPoint(n, point, dir);
+                const neighbor = neighbor_point(n, point, dir);
                 try std.testing.expectEqual(expected_present, neighbor != null);
 
                 if (neighbor) |actual_neighbor| {
                     const neighbor_d = try hilbert_curve.xy2d(order, actual_neighbor);
-                    try std.testing.expectEqual(indexDistance(d, neighbor_d), indexDistance(neighbor_d, d));
+                    try std.testing.expectEqual(
+                        index_distance(d, neighbor_d),
+                        index_distance(neighbor_d, d),
+                    );
                     try std.testing.expectEqual(neighbor_d, try hilbert_curve.xy2d(order, actual_neighbor));
                 }
             }
@@ -439,20 +506,20 @@ test "neighbor distances are correct for all points and directions" {
     }
 }
 
-test "writeNeighborDistanceHistogram emits empty order 0 report" {
+test "write_neighbor_distance_histogram emits empty order 0 report" {
     var buffer: [64]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
 
-    try writeNeighborDistanceHistogram(&writer, 0);
+    try write_neighbor_distance_histogram(&writer, 0);
 
     try std.testing.expectEqualStrings("", writer.buffered());
 }
 
-test "writeNeighborDistanceHistogram emits expected order 1 report" {
+test "write_neighbor_distance_histogram emits expected order 1 report" {
     var buffer: [128]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
 
-    try writeNeighborDistanceHistogram(&writer, 1);
+    try write_neighbor_distance_histogram(&writer, 1);
 
     const expected =
         \\distance=1 count=6 percentage=50.00%
@@ -464,11 +531,11 @@ test "writeNeighborDistanceHistogram emits expected order 1 report" {
     try std.testing.expectEqualStrings(expected, writer.buffered());
 }
 
-test "writeNeighborDistanceHistogram emits expected order 2 report" {
+test "write_neighbor_distance_histogram emits expected order 2 report" {
     var buffer: [512]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
 
-    try writeNeighborDistanceHistogram(&writer, 2);
+    try write_neighbor_distance_histogram(&writer, 2);
 
     const expected =
         \\distance=1 count=30 percentage=35.71%
@@ -486,20 +553,20 @@ test "writeNeighborDistanceHistogram emits expected order 2 report" {
     try std.testing.expectEqualStrings(expected, writer.buffered());
 }
 
-test "writeNeighborDistanceHistogramMaxDistance emits zero cutoff summary" {
+test "write_neighbor_distance_histogram_max_distance emits zero cutoff summary" {
     var buffer: [64]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
 
-    try writeNeighborDistanceHistogramMaxDistance(&writer, 1, 0);
+    try write_neighbor_distance_histogram_max_distance(&writer, 1, 0);
 
     try std.testing.expectEqualStrings("cumulative_percentage=0.00%\n", writer.buffered());
 }
 
-test "writeNeighborDistanceHistogramMaxDistance emits expected order 2 report" {
+test "write_neighbor_distance_histogram_max_distance emits expected order 2 report" {
     var buffer: [256]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
 
-    try writeNeighborDistanceHistogramMaxDistance(&writer, 2, 4);
+    try write_neighbor_distance_histogram_max_distance(&writer, 2, 4);
 
     const expected =
         \\distance=1 count=30 percentage=35.71%
@@ -513,11 +580,11 @@ test "writeNeighborDistanceHistogramMaxDistance emits expected order 2 report" {
     try std.testing.expectEqualStrings(expected, writer.buffered());
 }
 
-test "writeNeighborDistanceHistogramMaxDistance emits full order 2 report for oversized cutoff" {
+test "write_neighbor_distance_histogram_max_distance emits full order 2 report for oversized cutoff" {
     var buffer: [512]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
 
-    try writeNeighborDistanceHistogramMaxDistance(&writer, 2, std.math.maxInt(u16));
+    try write_neighbor_distance_histogram_max_distance(&writer, 2, std.math.maxInt(u16));
 
     const expected =
         \\distance=1 count=30 percentage=35.71%
@@ -536,11 +603,11 @@ test "writeNeighborDistanceHistogramMaxDistance emits full order 2 report for ov
     try std.testing.expectEqualStrings(expected, writer.buffered());
 }
 
-test "writeNeighborDistanceHistogramFiltered emits expected order 1 orthogonal report" {
+test "write_neighbor_distance_histogram_filtered emits expected order 1 orthogonal report" {
     var buffer: [192]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
 
-    try writeNeighborDistanceHistogramFiltered(&writer, 1, .orthogonal, null);
+    try write_neighbor_distance_histogram_filtered(&writer, 1, .orthogonal, null);
 
     const expected =
         \\distance=1 count=6 percentage=50.00%
@@ -552,11 +619,11 @@ test "writeNeighborDistanceHistogramFiltered emits expected order 1 orthogonal r
     try std.testing.expectEqualStrings(expected, writer.buffered());
 }
 
-test "writeNeighborDistanceHistogramFiltered emits expected order 1 diagonal report" {
+test "write_neighbor_distance_histogram_filtered emits expected order 1 diagonal report" {
     var buffer: [128]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
 
-    try writeNeighborDistanceHistogramFiltered(&writer, 1, .diagonal, null);
+    try write_neighbor_distance_histogram_filtered(&writer, 1, .diagonal, null);
 
     const expected =
         \\distance=2 count=4 percentage=33.33%
@@ -567,11 +634,11 @@ test "writeNeighborDistanceHistogramFiltered emits expected order 1 diagonal rep
     try std.testing.expectEqualStrings(expected, writer.buffered());
 }
 
-test "writeNeighborDistanceHistogramFiltered emits explicit kind all summary" {
+test "write_neighbor_distance_histogram_filtered emits explicit kind all summary" {
     var buffer: [192]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
 
-    try writeNeighborDistanceHistogramFiltered(&writer, 1, .all, null);
+    try write_neighbor_distance_histogram_filtered(&writer, 1, .all, null);
 
     const expected =
         \\distance=1 count=6 percentage=50.00%
@@ -584,11 +651,11 @@ test "writeNeighborDistanceHistogramFiltered emits explicit kind all summary" {
     try std.testing.expectEqualStrings(expected, writer.buffered());
 }
 
-test "writeNeighborDistanceHistogramFiltered emits expected order 2 diagonal max-distance report" {
+test "write_neighbor_distance_histogram_filtered emits expected order 2 diagonal max-distance report" {
     var buffer: [192]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
 
-    try writeNeighborDistanceHistogramFiltered(&writer, 2, .diagonal, 4);
+    try write_neighbor_distance_histogram_filtered(&writer, 2, .diagonal, 4);
 
     const expected =
         \\distance=2 count=24 percentage=28.57%
@@ -600,41 +667,43 @@ test "writeNeighborDistanceHistogramFiltered emits expected order 2 diagonal max
     try std.testing.expectEqualStrings(expected, writer.buffered());
 }
 
-test "writeNeighborDistanceHistogramFiltered emits empty filtered result summary" {
+test "write_neighbor_distance_histogram_filtered emits empty filtered result summary" {
     var buffer: [64]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
 
-    try writeNeighborDistanceHistogramFiltered(&writer, 1, .diagonal, 1);
+    try write_neighbor_distance_histogram_filtered(&writer, 1, .diagonal, 1);
 
     try std.testing.expectEqualStrings("cumulative_percentage=0.00%\n", writer.buffered());
 }
 
-test "writeNeighborDistanceHistogramFiltered emits order 0 summary" {
+test "write_neighbor_distance_histogram_filtered emits order 0 summary" {
     var buffer: [64]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
 
-    try writeNeighborDistanceHistogramFiltered(&writer, 0, .orthogonal, null);
+    try write_neighbor_distance_histogram_filtered(&writer, 0, .orthogonal, null);
 
     try std.testing.expectEqualStrings("cumulative_percentage=0.00%\n", writer.buffered());
 }
 
-test "writePercentage rounds and zero pads to hundredths" {
+test "write_percentage rounds and zero pads to hundredths" {
     var buffer: [32]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
 
-    try writePercentage(&writer, 1, 8);
+    try write_percentage(&writer, 1, 8);
     try writer.writeByte(' ');
-    try writePercentage(&writer, 1, 6);
+    try write_percentage(&writer, 1, 6);
 
     try std.testing.expectEqualStrings("12.50% 16.67%", writer.buffered());
 }
 
-test "parseCommand accepts neighbors CLI shapes" {
-    const neighbor_command = try parseCommand(&.{ "4" });
-    const histogram_command = try parseCommand(&.{ "histogram", "5" });
-    const max_distance_command = try parseCommand(&.{ "histogram", "5", "max-distance", "80" });
-    const orthogonal_command = try parseCommand(&.{ "histogram", "5", "kind", "orthogonal" });
-    const combined_command = try parseCommand(&.{ "histogram", "5", "max-distance", "80", "kind", "diagonal" });
+test "parse_command accepts neighbors CLI shapes" {
+    const neighbor_command = try parse_command(&.{"4"});
+    const histogram_command = try parse_command(&.{ "histogram", "5" });
+    const max_distance_command = try parse_command(&.{ "histogram", "5", "max-distance", "80" });
+    const orthogonal_command = try parse_command(&.{ "histogram", "5", "kind", "orthogonal" });
+    const combined_command = try parse_command(
+        &.{ "histogram", "5", "max-distance", "80", "kind", "diagonal" },
+    );
 
     try std.testing.expectEqual(Mode.neighbors, neighbor_command.mode);
     try std.testing.expectEqual(@as(u8, 4), neighbor_command.order);
@@ -667,28 +736,28 @@ test "parseCommand accepts neighbors CLI shapes" {
     try std.testing.expectEqual(@as(?u16, 80), combined_command.max_distance);
 }
 
-test "parseCommand rejects malformed neighbors CLI shapes" {
-    try std.testing.expectError(error.InvalidUsage, parseCommand(&.{}));
-    try std.testing.expectError(error.InvalidUsage, parseCommand(&.{ "curve", "2" }));
-    try std.testing.expectError(error.InvalidUsage, parseCommand(&.{ "unknown", "2" }));
-    try std.testing.expectError(error.InvalidUsage, parseCommand(&.{ "histogram", "5", "max-distance" }));
-    try std.testing.expectError(error.InvalidUsage, parseCommand(&.{ "histogram", "5", "max-distance", "70000" }));
-    try std.testing.expectError(error.InvalidUsage, parseCommand(&.{ "histogram", "max-distance", "5", "80" }));
-    try std.testing.expectError(error.InvalidUsage, parseCommand(&.{ "histogram", "5", "kind" }));
-    try std.testing.expectError(error.InvalidUsage, parseCommand(&.{ "histogram", "5", "kind", "sideways" }));
-    try std.testing.expectError(error.InvalidUsage, parseCommand(&.{ "histogram", "5", "kind", "all", "kind", "diagonal" }));
-    try std.testing.expectError(error.InvalidUsage, parseCommand(&.{ "histogram", "5", "max-distance", "2", "max-distance", "4" }));
-    try std.testing.expectError(error.InvalidUsage, parseCommand(&.{ "histogram", "5", "kind", "all", "oops", "4" }));
+test "parse_command rejects malformed neighbors CLI shapes" {
+    try std.testing.expectError(error.InvalidUsage, parse_command(&.{}));
+    try std.testing.expectError(error.InvalidUsage, parse_command(&.{ "curve", "2" }));
+    try std.testing.expectError(error.InvalidUsage, parse_command(&.{ "unknown", "2" }));
+    try std.testing.expectError(error.InvalidUsage, parse_command(&.{ "histogram", "5", "max-distance" }));
+    try std.testing.expectError(error.InvalidUsage, parse_command(&.{ "histogram", "5", "max-distance", "70000" }));
+    try std.testing.expectError(error.InvalidUsage, parse_command(&.{ "histogram", "max-distance", "5", "80" }));
+    try std.testing.expectError(error.InvalidUsage, parse_command(&.{ "histogram", "5", "kind" }));
+    try std.testing.expectError(error.InvalidUsage, parse_command(&.{ "histogram", "5", "kind", "sideways" }));
+    try std.testing.expectError(error.InvalidUsage, parse_command(&.{ "histogram", "5", "kind", "all", "kind", "diagonal" }));
+    try std.testing.expectError(error.InvalidUsage, parse_command(&.{ "histogram", "5", "max-distance", "2", "max-distance", "4" }));
+    try std.testing.expectError(error.InvalidUsage, parse_command(&.{ "histogram", "5", "kind", "all", "oops", "4" }));
 }
 
-test "runCli dispatches neighbors CLI modes" {
+test "run_cli dispatches neighbors CLI modes" {
     var report_buffer: [128]u8 = undefined;
     var report_writer: std.Io.Writer = .fixed(&report_buffer);
     var histogram_buffer: [128]u8 = undefined;
     var histogram_writer: std.Io.Writer = .fixed(&histogram_buffer);
 
-    try runCli(&report_writer, &.{ "0" });
-    try runCli(&histogram_writer, &.{ "histogram", "1", "kind", "diagonal" });
+    try run_cli(&report_writer, &.{"0"});
+    try run_cli(&histogram_writer, &.{ "histogram", "1", "kind", "diagonal" });
 
     try std.testing.expectEqualStrings(
         \\d=0 pos=(0,0) N=- NE=- E=- SE=- S=- SW=- W=- NW=-
@@ -702,32 +771,40 @@ test "runCli dispatches neighbors CLI modes" {
     , histogram_writer.buffered());
 }
 
-test "runCli returns invalid order for out-of-range neighbors order" {
+test "run_cli returns invalid order for out-of-range neighbors order" {
     var buffer: [1]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
 
-    try std.testing.expectError(error.InvalidOrder, runCli(&writer, &.{ "9" }));
+    try std.testing.expectError(error.InvalidOrder, run_cli(&writer, &.{"9"}));
+}
+
+test "max_order keeps neighbor distances within u16" {
+    try std.testing.expectEqual(@as(u8, 8), max_order);
+    try std.testing.expectEqual(@as(u16, 256), grid_size(max_order));
+    try std.testing.expectEqual(std.math.maxInt(u16), max_index(max_order));
+    try validate_order(max_order);
+    try std.testing.expectError(error.InvalidOrder, validate_order(@as(u8, max_order + 1)));
 }
 
 test "neighbor distance histogram counts all valid neighbors" {
     var order: u8 = 0;
-    while (order <= hilbert_curve.max_order) : (order += 1) {
+    while (order <= max_order) : (order += 1) {
         var counts: [histogram_bins]u32 = [_]u32{0} ** histogram_bins;
-        const all_total_count = try fillNeighborDistanceCounts(order, .all, &counts);
+        const directed_neighbor_count_total = try fill_neighbor_distance_counts(order, .all, &counts);
 
         var histogram_total: u32 = 0;
         for (counts) |count| {
             histogram_total += count;
         }
 
-        const n = gridSize(order);
-        const end = maxIndex(order);
+        const n = grid_size(order);
+        const end = max_index(order);
         var expected_total: u32 = 0;
         var d: u16 = 0;
         while (true) {
             const point = try hilbert_curve.d2xy(order, d);
             for (directions) |dir| {
-                if (neighborPoint(n, point, dir) != null) {
+                if (neighbor_point(n, point, dir) != null) {
                     expected_total += 1;
                 }
             }
@@ -737,20 +814,28 @@ test "neighbor distance histogram counts all valid neighbors" {
         }
 
         try std.testing.expectEqual(expected_total, histogram_total);
-        try std.testing.expectEqual(expected_total, all_total_count);
+        try std.testing.expectEqual(expected_total, directed_neighbor_count_total);
     }
 }
 
 test "orthogonal and diagonal histogram counts partition all neighbors" {
     var order: u8 = 0;
-    while (order <= hilbert_curve.max_order) : (order += 1) {
+    while (order <= max_order) : (order += 1) {
         var all_counts: [histogram_bins]u32 = [_]u32{0} ** histogram_bins;
         var orthogonal_counts: [histogram_bins]u32 = [_]u32{0} ** histogram_bins;
         var diagonal_counts: [histogram_bins]u32 = [_]u32{0} ** histogram_bins;
 
-        const all_total_count = try fillNeighborDistanceCounts(order, .all, &all_counts);
-        const orthogonal_total_count = try fillNeighborDistanceCounts(order, .orthogonal, &orthogonal_counts);
-        const diagonal_total_count = try fillNeighborDistanceCounts(order, .diagonal, &diagonal_counts);
+        const all_total_count = try fill_neighbor_distance_counts(order, .all, &all_counts);
+        const orthogonal_total_count = try fill_neighbor_distance_counts(
+            order,
+            .orthogonal,
+            &orthogonal_counts,
+        );
+        const diagonal_total_count = try fill_neighbor_distance_counts(
+            order,
+            .diagonal,
+            &diagonal_counts,
+        );
 
         try std.testing.expectEqual(all_total_count, orthogonal_total_count);
         try std.testing.expectEqual(all_total_count, diagonal_total_count);

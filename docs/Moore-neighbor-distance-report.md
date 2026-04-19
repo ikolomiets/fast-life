@@ -11,7 +11,7 @@ Relevant code:
 - `src/root.zig` re-exports the canonical modules
 - `src/main.zig` exposes the combined CLI, while `src/modules/hilbert_neighbors.zig` also has its own standalone executable entry point
 
-The report walks the Hilbert curve from index `0` through `maxIndex(order)` and, for every visited cell, prints one line describing the Hilbert-curve distance to each of that cell's Moore neighbors.
+The report walks the Hilbert curve from index `0` through `max_index(order)` and, for every visited cell, prints one line describing the Hilbert-curve distance to each of that cell's Moore neighbors.
 
 ## Moore Neighborhood
 
@@ -48,7 +48,7 @@ abs(neighbor_d - d)
 This is implemented by the private helper:
 
 ```zig
-fn indexDistance(a: u16, b: u16) u16
+fn index_distance(a: u16, b: u16) u16
 ```
 
 The result is symmetric:
@@ -61,7 +61,7 @@ The result is symmetric:
 Neighbor lookup is handled by:
 
 ```zig
-fn neighborPoint(n: u16, point: Point, dir: Direction) ?Point
+fn neighbor_point(n: u16, point: Point, dir: Direction) ?Point
 ```
 
 Purpose:
@@ -86,17 +86,17 @@ Signed temporary coordinates are used during the step calculation so that moves 
 The main writer is:
 
 ```zig
-pub fn writeNeighborDistances(writer: anytype, order: u8) !void
+pub fn write_neighbor_distances(writer: anytype, order: u8) !void
 ```
 
 Processing steps:
 
 1. Validate `order`
-2. Compute `n = gridSize(order)`
-3. Iterate `d` from `0` through `maxIndex(order)`
+2. Compute `n = grid_size(order)`
+3. Iterate `d` from `0` through `max_index(order)`
 4. Compute the current coordinate with `hilbert.d2xy(order, d)`
 5. For each direction in fixed order `N NE E SE S SW W NW`:
-   - call `neighborPoint`
+   - call `neighbor_point`
    - if the neighbor exists, compute `neighbor_d = hilbert.xy2d(order, neighbor)`
    - print `abs(neighbor_d - d)`
    - otherwise print `-`
@@ -109,9 +109,9 @@ The implementation also exposes:
 
 ```zig
 pub const NeighborKind = enum { all, orthogonal, diagonal };
-pub fn writeNeighborDistanceHistogram(writer: anytype, order: u8) !void
-pub fn writeNeighborDistanceHistogramMaxDistance(writer: anytype, order: u8, max_distance: u16) !void
-pub fn writeNeighborDistanceHistogramFiltered(writer: anytype, order: u8, kind: NeighborKind, max_distance: ?u16) !void
+pub fn write_neighbor_distance_histogram(writer: anytype, order: u8) !void
+pub fn write_neighbor_distance_histogram_max_distance(writer: anytype, order: u8, max_distance: u16) !void
+pub fn write_neighbor_distance_histogram_filtered(writer: anytype, order: u8, kind: NeighborKind, max_distance: ?u16) !void
 ```
 
 This mode computes the frequency of every distance that appears among valid Moore-neighbor relationships in the report.
@@ -256,7 +256,7 @@ Mode behavior:
 - `neighbors histogram <order> max-distance <distance>` emits only distances `1..max_distance` and a final cumulative percentage row
 - the two histogram filters may be combined in either order
 
-Neighbor-specific argument parsing is handled in `src/modules/hilbert_neighbors.zig` by `runCli`, which is used both by the standalone module `main(init)` entry point and by the top-level router in `src/main.zig`. `src/main.zig` only routes the top-level mode and prints combined usage text for invalid requests.
+Neighbor-specific argument parsing is handled in `src/modules/hilbert_neighbors.zig` by `run_cli`, which is used both by the standalone module `main(init)` entry point and by the top-level router in `src/main.zig`. `src/main.zig` only routes the top-level mode and prints combined usage text for invalid requests.
 
 ## Tests
 

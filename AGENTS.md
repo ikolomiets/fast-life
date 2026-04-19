@@ -20,6 +20,7 @@ Use Zig’s standard build commands:
 - `zig build test` to run the inline unit tests in the module files and CLI entry point
 - `zig build run -- 2` to print the full order-2 Hilbert traversal as `d x y`
 - `zig build` to compile the `hilbert_curve` executable into `zig-out/`
+- `zig fmt build.zig src` to format the Zig sources
 
 Use `rg "TODO|FIXME" .` before submitting changes if you add follow-up notes.
 
@@ -27,13 +28,34 @@ Use `rg "TODO|FIXME" .` before submitting changes if you add follow-up notes.
 
 Use Zig with small, explicit helpers and straightforward integer math. Keep the algorithm iterative and close to the reference material in `docs/hilbert_curve_implementation.md`. For documentation, use short sections and fenced code blocks for pseudocode or shell examples.
 
+Follow the local [TigerStyle reference](docs/TIGER_STYLE.md) as the default style guide for this repository. That document is copied from the upstream [TigerStyle](https://github.com/tigerbeetle/tigerbeetle/blob/main/docs/TIGER_STYLE.md). When a repo-specific rule in this file conflicts with TigerStyle, this file takes precedence.
+
+Apply these TigerStyle rules when editing this project:
+
+- prioritize safety, then performance, then developer experience
+- prefer simple, explicit control flow; avoid recursion and unnecessary abstractions
+- use `snake_case` for functions, variables, file names, and package-root or module aliases
+- keep Zig-style PascalCase for types, structs, enums, error sets, and type-returning factories such as `BinaryGrid(...)`
+- use explicitly sized integer types for domain data where practical, and use `usize` only where Zig APIs or indexing require it
+- assert preconditions, postconditions, and invariants; split compound assertions when it improves fault isolation
+- prefer checked and unchecked API pairs at module boundaries; guard unchecked paths with `std.debug.assert`
+- prefer explicit mutation and in-place initialization for large fixed-size values instead of returning large values by copy
+- prefer concrete domain boundaries over clever `anytype` abstractions unless the abstraction is clearly justified by multiple real callers
+- encode important geometry, packing, and size limits with compile-time checks and runtime assertions
+- keep functions small enough to fit on one screen, centralize control flow, and keep variable scope tight
+- use descriptive `snake_case` names, avoid abbreviations, and add units or qualifiers at the end when relevant, for example `distance_steps_max`
+- use `fast_life.binary_grid` as the canonical package-root import; do not reintroduce `fast_life.grid`
+- keep Hilbert reference identifiers such as `d2xy`, `xy2d`, `rx`, and `ry` as intentional exceptions, alongside Zig-standard names such as `main` and `deinit`
+- explain why with comments when the reasoning is not obvious; comments should read as sentences
+- run `zig fmt`, use 4-space indentation, and keep lines at 100 columns or fewer
+- prefer Zig-native tooling and avoid adding new dependencies unless there is a strong project-level reason
+- keep design notes, examples, and package-root import paths synchronized when public names change
+
 For filenames:
 
 - use lowercase
 - separate words with underscores
 - keep names descriptive and topic-specific
-
-Keep identifiers consistent with the implementation note, such as `rot`, `d2xy`, `xy2d`, `rx`, and `ry`.
 
 ## Testing Guidelines
 

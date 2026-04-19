@@ -57,23 +57,16 @@ const BodyState = struct {
     finished: bool = false,
 };
 
-fn gridType(comptime GridPtr: type) type {
-    return switch (@typeInfo(GridPtr)) {
-        .pointer => |pointer_info| pointer_info.child,
-        else => @compileError("expected a grid pointer"),
-    };
-}
-
-fn trimLine(line: []const u8) []const u8 {
+fn trim_line(line: []const u8) []const u8 {
     const without_cr = if (line.len != 0 and line[line.len - 1] == '\r') line[0 .. line.len - 1] else line;
     return std.mem.trim(u8, without_cr, " \t");
 }
 
-fn parseDimension(value_text: []const u8) ParseError!usize {
+fn parse_dimension(value_text: []const u8) ParseError!usize {
     return std.fmt.parseInt(usize, std.mem.trim(u8, value_text, " \t"), 10) catch error.InvalidHeader;
 }
 
-fn parseHeader(line: []const u8) ParseError!Header {
+fn parse_header(line: []const u8) ParseError!Header {
     var width: ?usize = null;
     var height: ?usize = null;
 
@@ -88,10 +81,10 @@ fn parseHeader(line: []const u8) ParseError!Header {
 
         if (std.mem.eql(u8, key, "x")) {
             if (width != null) return error.InvalidHeader;
-            width = try parseDimension(value);
+            width = try parse_dimension(value);
         } else if (std.mem.eql(u8, key, "y")) {
             if (height != null) return error.InvalidHeader;
-            height = try parseDimension(value);
+            height = try parse_dimension(value);
         } else if (std.mem.eql(u8, key, "rule")) {
             _ = std.mem.trim(u8, value, " \t");
         } else {
@@ -105,7 +98,13 @@ fn parseHeader(line: []const u8) ParseError!Header {
     };
 }
 
-fn pushLiveRun(allocator: std.mem.Allocator, live_cells: *std.ArrayList(PatternCell), row_y: usize, start_x: usize, count: usize) ParseError!void {
+fn push_live_run(
+    allocator: std.mem.Allocator,
+    live_cells: *std.ArrayList(PatternCell),
+    row_y: usize,
+    start_x: usize,
+    count: usize,
+) ParseError!void {
     try live_cells.ensureUnusedCapacity(allocator, count);
 
     var offset: usize = 0;
@@ -117,7 +116,7 @@ fn pushLiveRun(allocator: std.mem.Allocator, live_cells: *std.ArrayList(PatternC
     }
 }
 
-fn takeRunCount(state: *BodyState) ParseError!usize {
+fn take_run_count(state: *BodyState) ParseError!usize {
     if (!state.have_count) return 1;
 
     defer {
@@ -131,13 +130,50 @@ fn takeRunCount(state: *BodyState) ParseError!usize {
     return state.pending_count;
 }
 
-fn accumulateDigit(state: *BodyState, digit: u8) ParseError!void {
+fn accumulate_digit(state: *BodyState, digit: u8) ParseError!void {
     state.have_count = true;
     const widened = std.math.mul(usize, state.pending_count, 10) catch return error.InvalidBody;
     state.pending_count = std.math.add(usize, widened, digit) catch return error.InvalidBody;
 }
 
-fn parseBodyLine(
+fn handle_body_run(
+    allocator: std.mem.Allocator,
+    width: usize,
+    height: usize,
+    state: *BodyState,
+    live_cells: *std.ArrayList(PatternCell),
+    live: bool,
+) ParseError!void {
+    const count = try take_run_count(state);
+    if (state.y >= height) return error.PatternTooTall;
+
+    const next_x = std.math.add(usize, state.x, count) catch return error.PatternTooWide;
+    if (next_x > width) return error.PatternTooWide;
+    std.debug.assert(next_x > state.x);
+
+    if (live) {
+        try push_live_run(allocator, live_cells, state.y, state.x, count);
+    }
+    state.x = next_x;
+}
+
+fn handle_body_row_break(height: usize, state: *BodyState) ParseError!void {
+    const count = try take_run_count(state);
+    const next_y = std.math.add(usize, state.y, count) catch return error.PatternTooTall;
+    if (next_y > height) return error.PatternTooTall;
+    std.debug.assert(next_y > state.y);
+
+    state.y = next_y;
+    state.x = 0;
+}
+
+fn handle_body_terminator(state: *BodyState) ParseError!void {
+    if (state.have_count) return error.InvalidBody;
+    std.debug.assert(!state.finished);
+    state.finished = true;
+}
+
+fn parse_body_line(
     allocator: std.mem.Allocator,
     line: []const u8,
     width: usize,
@@ -157,71 +193,69 @@ fn parseBodyLine(
         }
 
         if (char >= '0' and char <= '9') {
-            try accumulateDigit(state, char - '0');
+            try accumulate_digit(state, char - '0');
             continue;
         }
 
         switch (char) {
-            'b', 'o' => {
-                const count = try takeRunCount(state);
-                if (state.y >= height) return error.PatternTooTall;
-
-                const next_x = std.math.add(usize, state.x, count) catch return error.PatternTooWide;
-                if (next_x > width) return error.PatternTooWide;
-
-                if (char == 'o') {
-                    try pushLiveRun(allocator, live_cells, state.y, state.x, count);
-                }
-                state.x = next_x;
-            },
-            '$' => {
-                const count = try takeRunCount(state);
-                const next_y = std.math.add(usize, state.y, count) catch return error.PatternTooTall;
-                if (next_y > height) return error.PatternTooTall;
-                state.y = next_y;
-                state.x = 0;
-            },
-            '!' => {
-                if (state.have_count) return error.InvalidBody;
-                state.finished = true;
-            },
+            'b' => try handle_body_run(allocator, width, height, state, live_cells, false),
+            'o' => try handle_body_run(allocator, width, height, state, live_cells, true),
+            '$' => try handle_body_row_break(height, state),
+            '!' => try handle_body_terminator(state),
             else => return error.InvalidBody,
         }
     }
 }
 
-fn validatePattern(pattern: Pattern) error{InvalidPattern}!void {
+fn validate_pattern(pattern: Pattern) error{InvalidPattern}!void {
     var previous: ?PatternCell = null;
 
     for (pattern.live_cells) |cell| {
-        if (cell.x >= pattern.width or cell.y >= pattern.height) {
+        if (cell.x >= pattern.width) {
+            return error.InvalidPattern;
+        }
+        if (cell.y >= pattern.height) {
             return error.InvalidPattern;
         }
 
         if (previous) |prev| {
             if (cell.y < prev.y) return error.InvalidPattern;
-            if (cell.y == prev.y and cell.x <= prev.x) return error.InvalidPattern;
+            if (cell.y == prev.y) {
+                if (cell.x <= prev.x) return error.InvalidPattern;
+            }
         }
 
         previous = cell;
     }
 }
 
-fn writeRun(writer: anytype, count: usize, symbol: u8) !void {
+fn write_run(writer: anytype, count: usize, symbol: u8) !void {
     if (count != 1) {
         try writer.print("{d}", .{count});
     }
     try writer.writeByte(symbol);
 }
 
-fn writeEncodedRow(writer: anytype, row_cells: []const PatternCell) !void {
+fn write_encoded_row(writer: anytype, row_cells: []const PatternCell) !void {
+    std.debug.assert(row_cells.len != 0);
+
+    const row_y = row_cells[0].y;
+    var previous_x: ?usize = null;
+    for (row_cells) |cell| {
+        std.debug.assert(cell.y == row_y);
+        if (previous_x) |prev_x| {
+            std.debug.assert(cell.x > prev_x);
+        }
+        previous_x = cell.x;
+    }
+
     var cursor_x: usize = 0;
     var index: usize = 0;
 
     while (index < row_cells.len) {
         const live_start = row_cells[index].x;
         if (live_start > cursor_x) {
-            try writeRun(writer, live_start - cursor_x, 'b');
+            try write_run(writer, live_start - cursor_x, 'b');
         }
 
         var live_end = live_start + 1;
@@ -230,13 +264,16 @@ fn writeEncodedRow(writer: anytype, row_cells: []const PatternCell) !void {
             live_end += 1;
         }
 
-        try writeRun(writer, live_end - live_start, 'o');
+        try write_run(writer, live_end - live_start, 'o');
         cursor_x = live_end;
     }
 }
 
-fn findLiveBounds(grid: anytype) ?Bounds {
-    const Grid = gridType(@TypeOf(grid));
+fn find_live_bounds(
+    comptime grid_order: usize,
+    grid: *const binary_grid.BinaryGrid(grid_order),
+) ?Bounds {
+    const Grid = binary_grid.BinaryGrid(grid_order);
     const side = Grid.cells_per_side;
 
     var bounds: Bounds = undefined;
@@ -246,7 +283,7 @@ fn findLiveBounds(grid: anytype) ?Bounds {
     while (y < side) : (y += 1) {
         var x: usize = 0;
         while (x < side) : (x += 1) {
-            if (!grid.getCellUnchecked(.{ .x = x, .y = y })) continue;
+            if (!grid.get_cell_unchecked(.{ .x = x, .y = y })) continue;
 
             if (!found_live) {
                 bounds = .{
@@ -269,17 +306,29 @@ fn findLiveBounds(grid: anytype) ?Bounds {
     return if (found_live) bounds else null;
 }
 
-fn writePatternHeader(writer: anytype, width: usize, height: usize) !void {
+fn write_pattern_header(writer: anytype, width: usize, height: usize) !void {
     try writer.print("x = {d}, y = {d}\n", .{ width, height });
 }
 
-fn writeGridRow(writer: anytype, grid: anytype, min_x: usize, row_y: usize, max_x: usize) !void {
+fn write_grid_row(
+    comptime grid_order: usize,
+    writer: anytype,
+    grid: *const binary_grid.BinaryGrid(grid_order),
+    min_x: usize,
+    row_y: usize,
+    max_x: usize,
+) !void {
+    const Grid = binary_grid.BinaryGrid(grid_order);
+    std.debug.assert(min_x <= max_x);
+    std.debug.assert(row_y < Grid.cells_per_side);
+    std.debug.assert(max_x < Grid.cells_per_side);
+
     var row_has_live = false;
     var last_live_x: usize = min_x;
 
     var x: usize = min_x;
     while (x <= max_x) : (x += 1) {
-        if (!grid.getCellUnchecked(.{ .x = x, .y = row_y })) continue;
+        if (!grid.get_cell_unchecked(.{ .x = x, .y = row_y })) continue;
         row_has_live = true;
         last_live_x = x;
     }
@@ -288,44 +337,45 @@ fn writeGridRow(writer: anytype, grid: anytype, min_x: usize, row_y: usize, max_
 
     var run_start = min_x;
     while (run_start <= last_live_x) {
-        const live = grid.getCellUnchecked(.{ .x = run_start, .y = row_y });
+        const live = grid.get_cell_unchecked(.{ .x = run_start, .y = row_y });
         var run_end = run_start + 1;
-        while (run_end <= last_live_x and grid.getCellUnchecked(.{ .x = run_end, .y = row_y }) == live) : (run_end += 1) {}
+        while (run_end <= last_live_x and grid.get_cell_unchecked(.{ .x = run_end, .y = row_y }) == live) : (run_end += 1) {}
 
-        try writeRun(writer, run_end - run_start, if (live) 'o' else 'b');
+        try write_run(writer, run_end - run_start, if (live) 'o' else 'b');
         run_start = run_end;
     }
 }
 
-fn printUsage(writer: *std.Io.Writer, exe_name: []const u8) !void {
+fn print_usage(writer: *std.Io.Writer, exe_name: []const u8) !void {
     try writer.print("Usage: {s} <input-rle-path> <output-rle-path>\n", .{exe_name});
     try writer.writeAll("Parse a Life RLE file into a BinaryGrid, extract the trimmed live pattern, and write canonical RLE output.\n");
 }
 
-fn printUsageAndFlush(writer: *std.Io.Writer, exe_name: []const u8) !void {
-    try printUsage(writer, exe_name);
+fn print_usage_and_flush(writer: *std.Io.Writer, exe_name: []const u8) !void {
+    try print_usage(writer, exe_name);
     try writer.flush();
 }
 
-fn rewritePatternThroughGridOrder(
+fn rewrite_pattern_through_grid_order(
     comptime grid_order: usize,
     allocator: std.mem.Allocator,
     pattern: Pattern,
 ) (std.mem.Allocator.Error || error{EmptyPattern})!Pattern {
     const Grid = binary_grid.BinaryGrid(grid_order);
-    var grid = Grid.initEmpty();
+    var grid: Grid = undefined;
+    grid.init_empty();
 
-    applyPattern(&grid, pattern, .{ .x = 0, .y = 0 }) catch |err| switch (err) {
+    apply_pattern(grid_order, &grid, pattern, .{ .x = 0, .y = 0 }) catch |err| switch (err) {
         error.InvalidPattern, error.PatternOutOfRange => unreachable,
     };
 
-    return extractPattern(allocator, &grid);
+    return extract_pattern(grid_order, allocator, &grid);
 }
 
 const cli_binary_grid_order: usize = 8;
 const cli_binary_grid_side: usize = binary_grid.BinaryGrid(cli_binary_grid_order).cells_per_side;
 
-pub fn parsePattern(allocator: std.mem.Allocator, input: []const u8) ParseError!Pattern {
+pub fn parse_pattern(allocator: std.mem.Allocator, input: []const u8) ParseError!Pattern {
     var lines = std.mem.splitScalar(u8, input, '\n');
     var header: ?Header = null;
     var live_cells = std.ArrayList(PatternCell).empty;
@@ -334,7 +384,7 @@ pub fn parsePattern(allocator: std.mem.Allocator, input: []const u8) ParseError!
     var state = BodyState{};
 
     while (lines.next()) |raw_line| {
-        const line = trimLine(raw_line);
+        const line = trim_line(raw_line);
         if (line.len == 0) continue;
         if (line[0] == '#') continue;
 
@@ -342,11 +392,11 @@ pub fn parsePattern(allocator: std.mem.Allocator, input: []const u8) ParseError!
             if (std.mem.findScalar(u8, line, '=') == null) {
                 return error.MissingHeader;
             }
-            header = try parseHeader(line);
+            header = try parse_header(line);
             continue;
         }
 
-        try parseBodyLine(allocator, line, header.?.width, header.?.height, &state, &live_cells);
+        try parse_body_line(allocator, line, header.?.width, header.?.height, &state, &live_cells);
     }
 
     const parsed_header = header orelse return error.MissingHeader;
@@ -359,16 +409,16 @@ pub fn parsePattern(allocator: std.mem.Allocator, input: []const u8) ParseError!
     };
 }
 
-pub fn parsePatternFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !Pattern {
+pub fn parse_pattern_file(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !Pattern {
     const input = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(max_pattern_file_bytes));
     defer allocator.free(input);
 
-    return parsePattern(allocator, input);
+    return parse_pattern(allocator, input);
 }
 
-pub fn writePattern(writer: anytype, pattern: Pattern) !void {
-    try validatePattern(pattern);
-    try writePatternHeader(writer, pattern.width, pattern.height);
+pub fn write_pattern(writer: anytype, pattern: Pattern) !void {
+    try validate_pattern(pattern);
+    try write_pattern_header(writer, pattern.width, pattern.height);
 
     if (pattern.live_cells.len == 0) {
         try writer.writeAll("!\n");
@@ -381,27 +431,27 @@ pub fn writePattern(writer: anytype, pattern: Pattern) !void {
     while (live_index < pattern.live_cells.len) {
         const row_y = pattern.live_cells[live_index].y;
         if (row_y > cursor_row) {
-            try writeRun(writer, row_y - cursor_row, '$');
+            try write_run(writer, row_y - cursor_row, '$');
         }
 
         const row_start = live_index;
         while (live_index < pattern.live_cells.len and pattern.live_cells[live_index].y == row_y) : (live_index += 1) {}
 
-        try writeEncodedRow(writer, pattern.live_cells[row_start..live_index]);
+        try write_encoded_row(writer, pattern.live_cells[row_start..live_index]);
         cursor_row = row_y;
     }
 
     try writer.writeAll("!\n");
 }
 
-pub fn writePatternFile(io: std.Io, path: []const u8, pattern: Pattern) !void {
+pub fn write_pattern_file(io: std.Io, path: []const u8, pattern: Pattern) !void {
     var file = try std.Io.Dir.cwd().createFile(io, path, .{});
     defer file.close(io);
 
     var file_writer = file.writer(io, &.{});
     const writer = &file_writer.interface;
 
-    writePattern(writer, pattern) catch |err| switch (err) {
+    write_pattern(writer, pattern) catch |err| switch (err) {
         error.WriteFailed => return file_writer.err.?,
         else => return err,
     };
@@ -410,8 +460,12 @@ pub fn writePatternFile(io: std.Io, path: []const u8, pattern: Pattern) !void {
     };
 }
 
-pub fn extractPattern(allocator: std.mem.Allocator, grid: anytype) (std.mem.Allocator.Error || error{EmptyPattern})!Pattern {
-    const bounds = findLiveBounds(grid) orelse return error.EmptyPattern;
+pub fn extract_pattern(
+    comptime grid_order: usize,
+    allocator: std.mem.Allocator,
+    grid: *const binary_grid.BinaryGrid(grid_order),
+) (std.mem.Allocator.Error || error{EmptyPattern})!Pattern {
+    const bounds = find_live_bounds(grid_order, grid) orelse return error.EmptyPattern;
     var live_cells = std.ArrayList(PatternCell).empty;
     errdefer live_cells.deinit(allocator);
 
@@ -419,7 +473,7 @@ pub fn extractPattern(allocator: std.mem.Allocator, grid: anytype) (std.mem.Allo
     while (y <= bounds.max_y) : (y += 1) {
         var x: usize = bounds.min_x;
         while (x <= bounds.max_x) : (x += 1) {
-            if (!grid.getCellUnchecked(.{ .x = x, .y = y })) continue;
+            if (!grid.get_cell_unchecked(.{ .x = x, .y = y })) continue;
 
             try live_cells.append(allocator, .{
                 .x = x - bounds.min_x,
@@ -435,12 +489,16 @@ pub fn extractPattern(allocator: std.mem.Allocator, grid: anytype) (std.mem.Allo
     };
 }
 
-pub fn writeGrid(writer: anytype, grid: anytype) !void {
-    const bounds = findLiveBounds(grid) orelse return error.EmptyPattern;
+pub fn write_grid(
+    comptime grid_order: usize,
+    writer: anytype,
+    grid: *const binary_grid.BinaryGrid(grid_order),
+) !void {
+    const bounds = find_live_bounds(grid_order, grid) orelse return error.EmptyPattern;
     const width = bounds.max_x - bounds.min_x + 1;
     const height = bounds.max_y - bounds.min_y + 1;
 
-    try writePatternHeader(writer, width, height);
+    try write_pattern_header(writer, width, height);
 
     var cursor_row: usize = 0;
     var row_y: usize = bounds.min_y;
@@ -448,7 +506,7 @@ pub fn writeGrid(writer: anytype, grid: anytype) !void {
         var row_has_live = false;
         var x: usize = bounds.min_x;
         while (x <= bounds.max_x) : (x += 1) {
-            if (grid.getCellUnchecked(.{ .x = x, .y = row_y })) {
+            if (grid.get_cell_unchecked(.{ .x = x, .y = row_y })) {
                 row_has_live = true;
                 break;
             }
@@ -458,55 +516,67 @@ pub fn writeGrid(writer: anytype, grid: anytype) !void {
 
         const relative_row = row_y - bounds.min_y;
         if (relative_row > cursor_row) {
-            try writeRun(writer, relative_row - cursor_row, '$');
+            try write_run(writer, relative_row - cursor_row, '$');
         }
 
-        try writeGridRow(writer, grid, bounds.min_x, row_y, bounds.max_x);
+        try write_grid_row(grid_order, writer, grid, bounds.min_x, row_y, bounds.max_x);
         cursor_row = relative_row;
     }
 
     try writer.writeAll("!\n");
 }
 
-pub fn applyPattern(grid: anytype, pattern: Pattern, origin: binary_grid.CellCoord) !void {
-    const Grid = gridType(@TypeOf(grid));
+pub fn apply_pattern(
+    comptime grid_order: usize,
+    grid: *binary_grid.BinaryGrid(grid_order),
+    pattern: Pattern,
+    origin: binary_grid.CellCoord,
+) !void {
+    const Grid = binary_grid.BinaryGrid(grid_order);
     const side = Grid.cells_per_side;
 
-    try validatePattern(pattern);
+    try validate_pattern(pattern);
 
+    // Validate the full placement before mutating so failure never leaves a partial overlay behind.
     for (pattern.live_cells) |cell| {
         const dest_x = std.math.add(usize, origin.x, cell.x) catch return error.PatternOutOfRange;
         const dest_y = std.math.add(usize, origin.y, cell.y) catch return error.PatternOutOfRange;
 
-        if (dest_x >= side or dest_y >= side) {
+        if (dest_x >= side) {
+            return error.PatternOutOfRange;
+        }
+        if (dest_y >= side) {
             return error.PatternOutOfRange;
         }
     }
 
     for (pattern.live_cells) |cell| {
-        grid.setCellUnchecked(.{
+        grid.set_cell_unchecked(.{
             .x = origin.x + cell.x,
             .y = origin.y + cell.y,
         }, true);
     }
 }
 
-pub fn runCli(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8) !void {
+pub fn run_cli(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8) !void {
     if (args.len != 2) {
         return error.InvalidUsage;
     }
 
-    var input_pattern = try parsePatternFile(io, allocator, args[0]);
+    var input_pattern = try parse_pattern_file(io, allocator, args[0]);
     defer input_pattern.deinit(allocator);
 
-    if (input_pattern.width > cli_binary_grid_side or input_pattern.height > cli_binary_grid_side) {
+    if (input_pattern.width > cli_binary_grid_side) {
+        return error.PatternTooLargeForBinaryGrid;
+    }
+    if (input_pattern.height > cli_binary_grid_side) {
         return error.PatternTooLargeForBinaryGrid;
     }
 
-    var output_pattern = try rewritePatternThroughGridOrder(cli_binary_grid_order, allocator, input_pattern);
+    var output_pattern = try rewrite_pattern_through_grid_order(cli_binary_grid_order, allocator, input_pattern);
     defer output_pattern.deinit(allocator);
 
-    try writePatternFile(io, args[1], output_pattern);
+    try write_pattern_file(io, args[1], output_pattern);
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -518,16 +588,16 @@ pub fn main(init: std.process.Init) !void {
     var stderr = std.Io.File.stderr().writer(io, &.{});
     const stderr_w = &stderr.interface;
 
-    runCli(io, allocator, args[1..]) catch |err| switch (err) {
+    run_cli(io, allocator, args[1..]) catch |err| switch (err) {
         error.InvalidUsage => {
-            try printUsageAndFlush(stderr_w, exe_name);
+            try print_usage_and_flush(stderr_w, exe_name);
             return err;
         },
         else => return err,
     };
 }
 
-fn expectPattern(pattern: Pattern, width: usize, height: usize, expected_cells: []const PatternCell) !void {
+fn expect_pattern(pattern: Pattern, width: usize, height: usize, expected_cells: []const PatternCell) !void {
     try std.testing.expectEqual(width, pattern.width);
     try std.testing.expectEqual(height, pattern.height);
     try std.testing.expectEqual(expected_cells.len, pattern.live_cells.len);
@@ -537,19 +607,19 @@ fn expectPattern(pattern: Pattern, width: usize, height: usize, expected_cells: 
     }
 }
 
-fn tmpFilePath(buffer: []u8, tmp_dir: *const std.testing.TmpDir, file_name: []const u8) ![]const u8 {
+fn tmp_file_path(buffer: []u8, tmp_dir: *const std.testing.TmpDir, file_name: []const u8) ![]const u8 {
     return std.fmt.bufPrint(buffer, ".zig-cache/tmp/{s}/{s}", .{ tmp_dir.sub_path, file_name });
 }
 
-test "parsePattern decodes a glider" {
-    var pattern = try parsePattern(std.testing.allocator,
+test "parse_pattern decodes a glider" {
+    var pattern = try parse_pattern(std.testing.allocator,
         \\x = 3, y = 3
         \\bo$2bo$3o!
         \\
     );
     defer pattern.deinit(std.testing.allocator);
 
-    try expectPattern(pattern, 3, 3, &.{
+    try expect_pattern(pattern, 3, 3, &.{
         .{ .x = 1, .y = 0 },
         .{ .x = 2, .y = 1 },
         .{ .x = 0, .y = 2 },
@@ -558,8 +628,8 @@ test "parsePattern decodes a glider" {
     });
 }
 
-test "parsePattern ignores comments whitespace and implicit trailing dead space" {
-    var pattern = try parsePattern(std.testing.allocator,
+test "parse_pattern ignores comments whitespace and implicit trailing dead space" {
+    var pattern = try parse_pattern(std.testing.allocator,
         \\#N Glider
         \\#C preserved as ignored input only
         \\x = 3, y = 3, rule = B3/S23
@@ -570,7 +640,7 @@ test "parsePattern ignores comments whitespace and implicit trailing dead space"
     );
     defer pattern.deinit(std.testing.allocator);
 
-    try expectPattern(pattern, 3, 3, &.{
+    try expect_pattern(pattern, 3, 3, &.{
         .{ .x = 1, .y = 0 },
         .{ .x = 2, .y = 1 },
         .{ .x = 0, .y = 2 },
@@ -579,29 +649,29 @@ test "parsePattern ignores comments whitespace and implicit trailing dead space"
     });
 }
 
-test "parsePattern accepts empty patterns" {
-    var pattern = try parsePattern(std.testing.allocator,
+test "parse_pattern accepts empty patterns" {
+    var pattern = try parse_pattern(std.testing.allocator,
         \\x = 4, y = 3
         \\!
         \\
     );
     defer pattern.deinit(std.testing.allocator);
 
-    try expectPattern(pattern, 4, 3, &.{});
+    try expect_pattern(pattern, 4, 3, &.{});
 }
 
-test "parsePattern rejects malformed input" {
-    try std.testing.expectError(error.MissingHeader, parsePattern(std.testing.allocator, "bo$2bo$3o!\n"));
-    try std.testing.expectError(error.InvalidHeader, parsePattern(std.testing.allocator, "x = 3\nbo!\n"));
-    try std.testing.expectError(error.InvalidBody, parsePattern(std.testing.allocator, "x = 1, y = 1\nx!\n"));
-    try std.testing.expectError(error.InvalidBody, parsePattern(std.testing.allocator, "x = 1, y = 1\n0o!\n"));
-    try std.testing.expectError(error.MissingTerminator, parsePattern(std.testing.allocator, "x = 1, y = 1\no\n"));
-    try std.testing.expectError(error.PatternTooWide, parsePattern(std.testing.allocator, "x = 2, y = 1\n3o!\n"));
-    try std.testing.expectError(error.PatternTooTall, parsePattern(std.testing.allocator, "x = 1, y = 1\no$o!\n"));
-    try std.testing.expectError(error.TrailingData, parsePattern(std.testing.allocator, "x = 1, y = 1\no!o\n"));
+test "parse_pattern rejects malformed input" {
+    try std.testing.expectError(error.MissingHeader, parse_pattern(std.testing.allocator, "bo$2bo$3o!\n"));
+    try std.testing.expectError(error.InvalidHeader, parse_pattern(std.testing.allocator, "x = 3\nbo!\n"));
+    try std.testing.expectError(error.InvalidBody, parse_pattern(std.testing.allocator, "x = 1, y = 1\nx!\n"));
+    try std.testing.expectError(error.InvalidBody, parse_pattern(std.testing.allocator, "x = 1, y = 1\n0o!\n"));
+    try std.testing.expectError(error.MissingTerminator, parse_pattern(std.testing.allocator, "x = 1, y = 1\no\n"));
+    try std.testing.expectError(error.PatternTooWide, parse_pattern(std.testing.allocator, "x = 2, y = 1\n3o!\n"));
+    try std.testing.expectError(error.PatternTooTall, parse_pattern(std.testing.allocator, "x = 1, y = 1\no$o!\n"));
+    try std.testing.expectError(error.TrailingData, parse_pattern(std.testing.allocator, "x = 1, y = 1\no!o\n"));
 }
 
-test "writePattern emits canonical RLE" {
+test "write_pattern emits canonical RLE" {
     var buffer: [128]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
     var live_cells = [_]PatternCell{
@@ -612,7 +682,7 @@ test "writePattern emits canonical RLE" {
         .{ .x = 2, .y = 2 },
     };
 
-    try writePattern(&writer, .{
+    try write_pattern(&writer, .{
         .width = 3,
         .height = 3,
         .live_cells = live_cells[0..],
@@ -625,7 +695,7 @@ test "writePattern emits canonical RLE" {
     , writer.buffered());
 }
 
-test "writePattern rejects invalid public Pattern values" {
+test "write_pattern rejects invalid public Pattern values" {
     var buffer: [128]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
     var live_cells = [_]PatternCell{
@@ -633,7 +703,7 @@ test "writePattern rejects invalid public Pattern values" {
         .{ .x = 0, .y = 1 },
     };
 
-    try std.testing.expectError(error.InvalidPattern, writePattern(&writer, .{
+    try std.testing.expectError(error.InvalidPattern, write_pattern(&writer, .{
         .width = 2,
         .height = 2,
         .live_cells = live_cells[0..],
@@ -648,25 +718,25 @@ test "parse and write round-trip preserves geometry and live cells" {
         \\
     ;
 
-    var pattern = try parsePattern(std.testing.allocator, input);
+    var pattern = try parse_pattern(std.testing.allocator, input);
     defer pattern.deinit(std.testing.allocator);
 
     var buffer: [128]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
-    try writePattern(&writer, pattern);
+    try write_pattern(&writer, pattern);
 
-    var roundtrip = try parsePattern(std.testing.allocator, writer.buffered());
+    var roundtrip = try parse_pattern(std.testing.allocator, writer.buffered());
     defer roundtrip.deinit(std.testing.allocator);
 
-    try expectPattern(roundtrip, pattern.width, pattern.height, pattern.live_cells);
+    try expect_pattern(roundtrip, pattern.width, pattern.height, pattern.live_cells);
 }
 
-test "writePatternFile writes canonical RLE text" {
+test "write_pattern_file writes canonical RLE text" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
     var path_buffer: [128]u8 = undefined;
-    const file_path = try tmpFilePath(&path_buffer, &tmp_dir, "glider.rle");
+    const file_path = try tmp_file_path(&path_buffer, &tmp_dir, "glider.rle");
 
     var live_cells = [_]PatternCell{
         .{ .x = 1, .y = 0 },
@@ -676,7 +746,7 @@ test "writePatternFile writes canonical RLE text" {
         .{ .x = 2, .y = 2 },
     };
 
-    try writePatternFile(std.testing.io, file_path, .{
+    try write_pattern_file(std.testing.io, file_path, .{
         .width = 3,
         .height = 3,
         .live_cells = live_cells[0..],
@@ -692,7 +762,7 @@ test "writePatternFile writes canonical RLE text" {
     , written);
 }
 
-test "parsePatternFile parses a pattern from disk" {
+test "parse_pattern_file parses a pattern from disk" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
@@ -707,12 +777,12 @@ test "parsePatternFile parses a pattern from disk" {
     });
 
     var path_buffer: [128]u8 = undefined;
-    const file_path = try tmpFilePath(&path_buffer, &tmp_dir, "glider.rle");
+    const file_path = try tmp_file_path(&path_buffer, &tmp_dir, "glider.rle");
 
-    var pattern = try parsePatternFile(std.testing.io, std.testing.allocator, file_path);
+    var pattern = try parse_pattern_file(std.testing.io, std.testing.allocator, file_path);
     defer pattern.deinit(std.testing.allocator);
 
-    try expectPattern(pattern, 3, 3, &.{
+    try expect_pattern(pattern, 3, 3, &.{
         .{ .x = 1, .y = 0 },
         .{ .x = 2, .y = 1 },
         .{ .x = 0, .y = 2 },
@@ -721,7 +791,7 @@ test "parsePatternFile parses a pattern from disk" {
     });
 }
 
-test "parsePatternFile rejects files larger than the built-in cap" {
+test "parse_pattern_file rejects files larger than the built-in cap" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
@@ -741,40 +811,42 @@ test "parsePatternFile rejects files larger than the built-in cap" {
     try writer.flush();
 
     var path_buffer: [128]u8 = undefined;
-    const file_path = try tmpFilePath(&path_buffer, &tmp_dir, "too_big.rle");
+    const file_path = try tmp_file_path(&path_buffer, &tmp_dir, "too_big.rle");
 
-    try std.testing.expectError(error.StreamTooLong, parsePatternFile(std.testing.io, std.testing.allocator, file_path));
+    try std.testing.expectError(error.StreamTooLong, parse_pattern_file(std.testing.io, std.testing.allocator, file_path));
 }
 
-test "extractPattern trims a grid to the live bounding box" {
+test "extract_pattern trims a grid to the live bounding box" {
     const Grid = binary_grid.BinaryGrid(2);
-    var grid = Grid.initEmpty();
+    var grid: Grid = undefined;
+    grid.init_empty();
 
-    try grid.setCell(.{ .x = 5, .y = 6 }, true);
-    try grid.setCell(.{ .x = 7, .y = 6 }, true);
-    try grid.setCell(.{ .x = 6, .y = 7 }, true);
+    try grid.set_cell(.{ .x = 5, .y = 6 }, true);
+    try grid.set_cell(.{ .x = 7, .y = 6 }, true);
+    try grid.set_cell(.{ .x = 6, .y = 7 }, true);
 
-    var pattern = try extractPattern(std.testing.allocator, &grid);
+    var pattern = try extract_pattern(2, std.testing.allocator, &grid);
     defer pattern.deinit(std.testing.allocator);
 
-    try expectPattern(pattern, 3, 2, &.{
+    try expect_pattern(pattern, 3, 2, &.{
         .{ .x = 0, .y = 0 },
         .{ .x = 2, .y = 0 },
         .{ .x = 1, .y = 1 },
     });
 }
 
-test "writeGrid matches the trimmed grid contents" {
+test "write_grid matches the trimmed grid contents" {
     const Grid = binary_grid.BinaryGrid(2);
-    var grid = Grid.initEmpty();
+    var grid: Grid = undefined;
+    grid.init_empty();
 
-    try grid.setCell(.{ .x = 5, .y = 6 }, true);
-    try grid.setCell(.{ .x = 7, .y = 6 }, true);
-    try grid.setCell(.{ .x = 6, .y = 7 }, true);
+    try grid.set_cell(.{ .x = 5, .y = 6 }, true);
+    try grid.set_cell(.{ .x = 7, .y = 6 }, true);
+    try grid.set_cell(.{ .x = 6, .y = 7 }, true);
 
     var buffer: [128]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
-    try writeGrid(&writer, &grid);
+    try write_grid(2, &writer, &grid);
 
     try std.testing.expectEqualStrings(
         \\x = 3, y = 2
@@ -783,67 +855,100 @@ test "writeGrid matches the trimmed grid contents" {
     , writer.buffered());
 }
 
-test "applyPattern overlays live cells without clearing unrelated cells" {
-    const Grid = binary_grid.BinaryGrid(2);
-    var grid = Grid.initEmpty();
-    try grid.setCell(.{ .x = 0, .y = 0 }, true);
+test "grid helpers are specialized to BinaryGrid across grid orders" {
+    var pattern = try parse_pattern(std.testing.allocator,
+        \\x = 2, y = 2
+        \\bo$2o!
+        \\
+    );
+    defer pattern.deinit(std.testing.allocator);
 
-    var pattern = try parsePattern(std.testing.allocator,
+    inline for ([_]usize{ 0, 2 }) |grid_order| {
+        const Grid = binary_grid.BinaryGrid(grid_order);
+        var grid: Grid = undefined;
+        grid.init_empty();
+
+        try apply_pattern(grid_order, &grid, pattern, .{ .x = 1, .y = 1 });
+
+        var extracted = try extract_pattern(grid_order, std.testing.allocator, &grid);
+        defer extracted.deinit(std.testing.allocator);
+        try expect_pattern(extracted, 2, 2, pattern.live_cells);
+
+        var buffer: [64]u8 = undefined;
+        var writer: std.Io.Writer = .fixed(&buffer);
+        try write_grid(grid_order, &writer, &grid);
+        try std.testing.expectEqualStrings(
+            \\x = 2, y = 2
+            \\bo$2o!
+            \\
+        , writer.buffered());
+    }
+}
+
+test "apply_pattern overlays live cells without clearing unrelated cells" {
+    const Grid = binary_grid.BinaryGrid(2);
+    var grid: Grid = undefined;
+    grid.init_empty();
+    try grid.set_cell(.{ .x = 0, .y = 0 }, true);
+
+    var pattern = try parse_pattern(std.testing.allocator,
         \\x = 3, y = 3
         \\bo$2bo$3o!
         \\
     );
     defer pattern.deinit(std.testing.allocator);
 
-    try applyPattern(&grid, pattern, .{ .x = 4, .y = 5 });
+    try apply_pattern(2, &grid, pattern, .{ .x = 4, .y = 5 });
 
-    try std.testing.expect(try grid.getCell(.{ .x = 0, .y = 0 }));
-    try std.testing.expect(try grid.getCell(.{ .x = 5, .y = 5 }));
-    try std.testing.expect(try grid.getCell(.{ .x = 6, .y = 6 }));
-    try std.testing.expect(try grid.getCell(.{ .x = 4, .y = 7 }));
-    try std.testing.expect(try grid.getCell(.{ .x = 5, .y = 7 }));
-    try std.testing.expect(try grid.getCell(.{ .x = 6, .y = 7 }));
+    try std.testing.expect(try grid.get_cell(.{ .x = 0, .y = 0 }));
+    try std.testing.expect(try grid.get_cell(.{ .x = 5, .y = 5 }));
+    try std.testing.expect(try grid.get_cell(.{ .x = 6, .y = 6 }));
+    try std.testing.expect(try grid.get_cell(.{ .x = 4, .y = 7 }));
+    try std.testing.expect(try grid.get_cell(.{ .x = 5, .y = 7 }));
+    try std.testing.expect(try grid.get_cell(.{ .x = 6, .y = 7 }));
 }
 
-test "applyPattern fails before mutating when placement is out of bounds" {
+test "apply_pattern fails before mutating when placement is out of bounds" {
     const Grid = binary_grid.BinaryGrid(2);
-    var grid = Grid.initEmpty();
+    var grid: Grid = undefined;
+    grid.init_empty();
 
-    var pattern = try parsePattern(std.testing.allocator,
+    var pattern = try parse_pattern(std.testing.allocator,
         \\x = 3, y = 3
         \\bo$2bo$3o!
         \\
     );
     defer pattern.deinit(std.testing.allocator);
 
-    try std.testing.expectError(error.PatternOutOfRange, applyPattern(&grid, pattern, .{ .x = 14, .y = 14 }));
-    try std.testing.expect(!(try grid.getCell(.{ .x = 14, .y = 14 })));
-    try std.testing.expect(!(try grid.getCell(.{ .x = 15, .y = 15 })));
+    try std.testing.expectError(error.PatternOutOfRange, apply_pattern(2, &grid, pattern, .{ .x = 14, .y = 14 }));
+    try std.testing.expect(!(try grid.get_cell(.{ .x = 14, .y = 14 })));
+    try std.testing.expect(!(try grid.get_cell(.{ .x = 15, .y = 15 })));
 }
 
-test "extractPattern and writeGrid reject empty grids" {
+test "extract_pattern and write_grid reject empty grids" {
     const Grid = binary_grid.BinaryGrid(1);
-    var grid = Grid.initEmpty();
+    var grid: Grid = undefined;
+    grid.init_empty();
 
-    try std.testing.expectError(error.EmptyPattern, extractPattern(std.testing.allocator, &grid));
+    try std.testing.expectError(error.EmptyPattern, extract_pattern(1, std.testing.allocator, &grid));
 
     var buffer: [64]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
-    try std.testing.expectError(error.EmptyPattern, writeGrid(&writer, &grid));
+    try std.testing.expectError(error.EmptyPattern, write_grid(1, &writer, &grid));
 }
 
-test "rewritePatternThroughGridOrder trims parsed live bounds" {
-    var pattern = try parsePattern(std.testing.allocator,
+test "rewrite_pattern_through_grid_order trims parsed live bounds" {
+    var pattern = try parse_pattern(std.testing.allocator,
         \\x = 6, y = 6
         \\$2bo$3bo$b3o!
         \\
     );
     defer pattern.deinit(std.testing.allocator);
 
-    var rewritten = try rewritePatternThroughGridOrder(2, std.testing.allocator, pattern);
+    var rewritten = try rewrite_pattern_through_grid_order(2, std.testing.allocator, pattern);
     defer rewritten.deinit(std.testing.allocator);
 
-    try expectPattern(rewritten, 3, 3, &.{
+    try expect_pattern(rewritten, 3, 3, &.{
         .{ .x = 1, .y = 0 },
         .{ .x = 2, .y = 1 },
         .{ .x = 0, .y = 2 },
@@ -852,7 +957,7 @@ test "rewritePatternThroughGridOrder trims parsed live bounds" {
     });
 }
 
-test "runCli rewrites an input file through grid extraction" {
+test "run_cli rewrites an input file through grid extraction" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
@@ -866,11 +971,11 @@ test "runCli rewrites an input file through grid extraction" {
     });
 
     var input_path_buffer: [128]u8 = undefined;
-    const input_path = try tmpFilePath(&input_path_buffer, &tmp_dir, "input.rle");
+    const input_path = try tmp_file_path(&input_path_buffer, &tmp_dir, "input.rle");
     var output_path_buffer: [128]u8 = undefined;
-    const output_path = try tmpFilePath(&output_path_buffer, &tmp_dir, "output.rle");
+    const output_path = try tmp_file_path(&output_path_buffer, &tmp_dir, "output.rle");
 
-    try runCli(std.testing.io, std.testing.allocator, &.{ input_path, output_path });
+    try run_cli(std.testing.io, std.testing.allocator, &.{ input_path, output_path });
 
     const written = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, output_path, std.testing.allocator, .limited(max_pattern_file_bytes));
     defer std.testing.allocator.free(written);
@@ -882,7 +987,7 @@ test "runCli rewrites an input file through grid extraction" {
     , written);
 }
 
-test "runCli rejects declared width larger than the fixed grid side" {
+test "run_cli rejects declared width larger than the fixed grid side" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
@@ -896,14 +1001,14 @@ test "runCli rejects declared width larger than the fixed grid side" {
     });
 
     var input_path_buffer: [128]u8 = undefined;
-    const input_path = try tmpFilePath(&input_path_buffer, &tmp_dir, "too_wide.rle");
+    const input_path = try tmp_file_path(&input_path_buffer, &tmp_dir, "too_wide.rle");
     var output_path_buffer: [128]u8 = undefined;
-    const output_path = try tmpFilePath(&output_path_buffer, &tmp_dir, "output.rle");
+    const output_path = try tmp_file_path(&output_path_buffer, &tmp_dir, "output.rle");
 
-    try std.testing.expectError(error.PatternTooLargeForBinaryGrid, runCli(std.testing.io, std.testing.allocator, &.{ input_path, output_path }));
+    try std.testing.expectError(error.PatternTooLargeForBinaryGrid, run_cli(std.testing.io, std.testing.allocator, &.{ input_path, output_path }));
 }
 
-test "runCli rejects declared height larger than the fixed grid side" {
+test "run_cli rejects declared height larger than the fixed grid side" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
@@ -917,14 +1022,14 @@ test "runCli rejects declared height larger than the fixed grid side" {
     });
 
     var input_path_buffer: [128]u8 = undefined;
-    const input_path = try tmpFilePath(&input_path_buffer, &tmp_dir, "too_tall.rle");
+    const input_path = try tmp_file_path(&input_path_buffer, &tmp_dir, "too_tall.rle");
     var output_path_buffer: [128]u8 = undefined;
-    const output_path = try tmpFilePath(&output_path_buffer, &tmp_dir, "output.rle");
+    const output_path = try tmp_file_path(&output_path_buffer, &tmp_dir, "output.rle");
 
-    try std.testing.expectError(error.PatternTooLargeForBinaryGrid, runCli(std.testing.io, std.testing.allocator, &.{ input_path, output_path }));
+    try std.testing.expectError(error.PatternTooLargeForBinaryGrid, run_cli(std.testing.io, std.testing.allocator, &.{ input_path, output_path }));
 }
 
-test "runCli accepts declared bounds exactly matching the fixed grid side" {
+test "run_cli accepts declared bounds exactly matching the fixed grid side" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
@@ -938,11 +1043,11 @@ test "runCli accepts declared bounds exactly matching the fixed grid side" {
     });
 
     var input_path_buffer: [128]u8 = undefined;
-    const input_path = try tmpFilePath(&input_path_buffer, &tmp_dir, "edge_ok.rle");
+    const input_path = try tmp_file_path(&input_path_buffer, &tmp_dir, "edge_ok.rle");
     var output_path_buffer: [128]u8 = undefined;
-    const output_path = try tmpFilePath(&output_path_buffer, &tmp_dir, "output.rle");
+    const output_path = try tmp_file_path(&output_path_buffer, &tmp_dir, "output.rle");
 
-    try runCli(std.testing.io, std.testing.allocator, &.{ input_path, output_path });
+    try run_cli(std.testing.io, std.testing.allocator, &.{ input_path, output_path });
 
     const written = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, output_path, std.testing.allocator, .limited(max_pattern_file_bytes));
     defer std.testing.allocator.free(written);
@@ -954,7 +1059,7 @@ test "runCli accepts declared bounds exactly matching the fixed grid side" {
     , written);
 }
 
-test "runCli rejects oversized empty patterns before empty-grid extraction" {
+test "run_cli rejects oversized empty patterns before empty-grid extraction" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
@@ -968,14 +1073,14 @@ test "runCli rejects oversized empty patterns before empty-grid extraction" {
     });
 
     var input_path_buffer: [128]u8 = undefined;
-    const input_path = try tmpFilePath(&input_path_buffer, &tmp_dir, "oversized_empty.rle");
+    const input_path = try tmp_file_path(&input_path_buffer, &tmp_dir, "oversized_empty.rle");
     var output_path_buffer: [128]u8 = undefined;
-    const output_path = try tmpFilePath(&output_path_buffer, &tmp_dir, "output.rle");
+    const output_path = try tmp_file_path(&output_path_buffer, &tmp_dir, "output.rle");
 
-    try std.testing.expectError(error.PatternTooLargeForBinaryGrid, runCli(std.testing.io, std.testing.allocator, &.{ input_path, output_path }));
+    try std.testing.expectError(error.PatternTooLargeForBinaryGrid, run_cli(std.testing.io, std.testing.allocator, &.{ input_path, output_path }));
 }
 
-test "runCli keeps empty in-bounds patterns as empty-grid errors" {
+test "run_cli keeps empty in-bounds patterns as empty-grid errors" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
@@ -989,15 +1094,15 @@ test "runCli keeps empty in-bounds patterns as empty-grid errors" {
     });
 
     var input_path_buffer: [128]u8 = undefined;
-    const input_path = try tmpFilePath(&input_path_buffer, &tmp_dir, "empty_ok.rle");
+    const input_path = try tmp_file_path(&input_path_buffer, &tmp_dir, "empty_ok.rle");
     var output_path_buffer: [128]u8 = undefined;
-    const output_path = try tmpFilePath(&output_path_buffer, &tmp_dir, "output.rle");
+    const output_path = try tmp_file_path(&output_path_buffer, &tmp_dir, "output.rle");
 
-    try std.testing.expectError(error.EmptyPattern, runCli(std.testing.io, std.testing.allocator, &.{ input_path, output_path }));
+    try std.testing.expectError(error.EmptyPattern, run_cli(std.testing.io, std.testing.allocator, &.{ input_path, output_path }));
 }
 
-test "runCli rejects invalid argument counts" {
-    try std.testing.expectError(error.InvalidUsage, runCli(std.testing.io, std.testing.allocator, &.{}));
-    try std.testing.expectError(error.InvalidUsage, runCli(std.testing.io, std.testing.allocator, &.{ "input.rle" }));
-    try std.testing.expectError(error.InvalidUsage, runCli(std.testing.io, std.testing.allocator, &.{ "in.rle", "out.rle", "extra" }));
+test "run_cli rejects invalid argument counts" {
+    try std.testing.expectError(error.InvalidUsage, run_cli(std.testing.io, std.testing.allocator, &.{}));
+    try std.testing.expectError(error.InvalidUsage, run_cli(std.testing.io, std.testing.allocator, &.{"input.rle"}));
+    try std.testing.expectError(error.InvalidUsage, run_cli(std.testing.io, std.testing.allocator, &.{ "in.rle", "out.rle", "extra" }));
 }

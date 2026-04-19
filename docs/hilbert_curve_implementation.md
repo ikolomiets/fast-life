@@ -288,28 +288,36 @@ In the generic algorithm, higher orders work if the integer widths are widened. 
 
 `src/modules/hilbert_curve.zig` validates all public inputs before doing bit manipulation:
 
-- `validateOrder(order)` returns `error.InvalidOrder` when `order > 8`
-- `validateIndex(order, d)` returns `error.IndexOutOfRange` when `d >= 4^order`
-- `validatePoint(order, point)` returns `error.PointOutOfRange` when either coordinate is outside `[0, 2^order)`
+- `validate_order(order)` returns `error.InvalidOrder` when `order > 8`
+- `validate_index(order, d)` returns `error.IndexOutOfRange` when `d >= 4^order`
+- `validate_point(order, point)` returns `error.PointOutOfRange` when either coordinate is outside `[0, 2^order)`
 
 These checks keep failure modes explicit and prevent silent wraparound.
 
 Two small helpers derive grid geometry:
 
 ```zig
-fn gridSize(order: u8) u16
-fn maxIndex(order: u8) u16
+fn grid_size(order: u8) u16
+fn max_index(order: u8) u16
 ```
 
-`gridSize` computes `1 << order`. `maxIndex` computes the inclusive last valid Hilbert index:
+`grid_size` computes `1 << order`. `max_index` computes the inclusive last valid Hilbert index:
 
-- for orders `0..7`, `maxIndex = 4^order - 1`
-- for order `8`, `maxIndex = 65535`
+- for orders `0..7`, `max_index = 4^order - 1`
+- for order `8`, `max_index = 65535`
+
+The code also keeps one private geometry helper for debug assertions:
+
+```zig
+fn max_index_for_grid_size(n: u16) u16
+```
+
+Unchecked helpers assert that `n` is non-zero, a power of two, and consistent with the documented `u16` limits. A small compile-time block also verifies that `max_order = 8` still fits the chosen public integer widths.
 
 The public mapping functions validate once, then delegate into internal unchecked helpers:
 
-- `d2xyUnchecked(n, d)`
-- `xy2dUnchecked(n, point)`
+- `d2xy_unchecked(n, d)`
+- `xy2d_unchecked(n, point)`
 
 That keeps boundary checks at the API edge while avoiding repeated validation in internal loops such as full-curve generation.
 
@@ -317,8 +325,8 @@ That keeps boundary checks at the API edge while avoiding repeated validation in
 
 The abstract algorithm uses one `rot(size, x, y, rx, ry)` transform. The Zig code splits that into two private helpers:
 
-- `rotUnsigned(size: u16, x: *u16, y: *u16, rx: u16, ry: u16)`
-- `rotSigned(size: i32, x: *i32, y: *i32, rx: i32, ry: i32)`
+- `rot_unsigned(size: u16, x: *u16, y: *u16, rx: u16, ry: u16)`
+- `rot_signed(size: i32, x: *i32, y: *i32, rx: i32, ry: i32)`
 
 Both implement the same logic:
 
@@ -343,7 +351,7 @@ Implementation flow:
 
 1. Validate `order` and `d`
 2. Compute `n = 2^order`
-3. Delegate to `d2xyUnchecked(n, d)`
+3. Delegate to `d2xy_unchecked(n, d)`
 4. Initialize `x = 0`, `y = 0`, `t = d`, and `size = 1`
 5. Loop while `size < n`, extracting `rx` and `ry`, rotating, offsetting, and doubling `size`
 6. Return the final `Point`
@@ -358,7 +366,7 @@ Implementation flow:
 
 1. Validate `order` and `point`
 2. Compute `n = 2^order`
-3. Delegate to `xy2dUnchecked(n, point)`
+3. Delegate to `xy2d_unchecked(n, point)`
 4. Promote `x` and `y` to signed `i32`
 5. Start from `size = n / 2`
 6. Loop while `size > 0`, deriving `rx` and `ry`, adding the quadrant contribution with `(3 * rx) ^ ry`, rotating, and halving `size`
@@ -368,18 +376,18 @@ Both mappings stay faithful to the standard iterative algorithm and complete in 
 
 ## Curve Writer
 
-The canonical `fast_life.hilbert_neighbors` module also exposes:
+The canonical `fast_life.hilbert_curve` module also exposes:
 
 ```zig
-pub fn writeCurve(writer: anytype, order: u8) !void
+pub fn write_curve(writer: anytype, order: u8) !void
 ```
 
 This helper:
 
 - validates `order`
 - computes `n = 2^order` once
-- iterates over all indices from `0` to `maxIndex(order)`
-- calls `d2xyUnchecked(n, d)` for each index
+- iterates over all indices from `0` to `max_index(order)`
+- calls `d2xy_unchecked(n, d)` for each index
 - prints one line per point as `d x y`
 
 Example for order `2`:
@@ -401,10 +409,10 @@ The library also exposes:
 
 ```zig
 pub const NeighborKind = enum { all, orthogonal, diagonal };
-pub fn writeNeighborDistances(writer: anytype, order: u8) !void
-pub fn writeNeighborDistanceHistogram(writer: anytype, order: u8) !void
-pub fn writeNeighborDistanceHistogramMaxDistance(writer: anytype, order: u8, max_distance: u16) !void
-pub fn writeNeighborDistanceHistogramFiltered(writer: anytype, order: u8, kind: NeighborKind, max_distance: ?u16) !void
+pub fn write_neighbor_distances(writer: anytype, order: u8) !void
+pub fn write_neighbor_distance_histogram(writer: anytype, order: u8) !void
+pub fn write_neighbor_distance_histogram_max_distance(writer: anytype, order: u8, max_distance: u16) !void
+pub fn write_neighbor_distance_histogram_filtered(writer: anytype, order: u8, kind: NeighborKind, max_distance: ?u16) !void
 ```
 
 This report walks the Hilbert curve in index order and prints one line per cell with:
@@ -423,7 +431,7 @@ Example output line:
 d=5 pos=(0,3) N=1 NE=8 E=1 SE=- S=- SW=- W=- NW=-
 ```
 
-Neighbor lookup is handled by a private `neighborPoint(n, point, dir)` helper in `src/modules/hilbert_neighbors.zig`. It computes the candidate adjacent cell from the `Direction` value, rejects out-of-bounds results, and returns `null` for missing border or corner neighbors.
+Neighbor lookup is handled by a private `neighbor_point(n, point, dir)` helper in `src/modules/hilbert_neighbors.zig`. It computes the candidate adjacent cell from the `Direction` value, rejects out-of-bounds results, and returns `null` for missing border or corner neighbors.
 
 ## Command-Line Entry Point
 
@@ -460,7 +468,7 @@ Behavior:
 - `std.Io.File.stdout().writer(init.io, &buffer)` for buffered curve output
 - `std.Io.File.stderr().writer(init.io, &.{})` for short unbuffered usage messages
 
-The top-level router strips the `curve` and `neighbors` prefixes before delegating to `hilbert_curve.runCli` and `hilbert_neighbors.runCli`, prints the combined usage text on `error.InvalidUsage` and `error.InvalidOrder`, and explicitly flushes stdout before exiting. Each module also exposes its own standalone `main(init)` entrypoint, so the source files can be executed directly with `zig run`.
+The top-level router strips the `curve` and `neighbors` prefixes before delegating to `hilbert_curve.run_cli` and `hilbert_neighbors.run_cli`, prints the combined usage text on `error.InvalidUsage` and `error.InvalidOrder`, and explicitly flushes stdout before exiting. Each module also exposes its own standalone `main(init)` entrypoint, so the source files can be executed directly with `zig run`.
 
 ## Performance Characteristics
 
@@ -499,10 +507,12 @@ The suite covers:
 - orthogonal and diagonal histogram counts partition the full histogram for every order in `0..8`
 - bounds checking for generated coordinates
 - invalid order, index, and coordinate errors
-- exact `writeCurve` output for order `2`
+- exact `write_curve` output for order `2`
 - CLI parsing for bare and explicit output modes
 
 These tests validate both the generic Hilbert mapping and the repository's public interface choices.
+
+TigerStyle in this repository uses `snake_case` for functions, variables, and files, while keeping Zig-style type names such as `Point` and `Direction`.
 
 ## Build Integration
 
