@@ -26,7 +26,9 @@ test "package_root_exposes_binary_grid_block_and_grid_apis" {
     try grid_instance.set_block(0, block);
 
     try std.testing.expect(try grid_instance.get_cell(.{ .x = 3, .y = 3 }));
+    try std.testing.expect(try grid_instance.get_cell_neighbor(.{ .x = 0, .y = 0 }, binary_grid.Direction.NW));
     try std.testing.expect((try grid_instance.get_block(0)).get(3, 3));
+    try std.testing.expect((try grid_instance.get_block_neighbor(0, .E)).get(3, 3));
 }
 
 test "package_root_exposes_life_rle_module" {

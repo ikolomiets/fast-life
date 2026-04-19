@@ -23,8 +23,6 @@ The current module reflects the repository's TigerStyle rules in a few explicit 
 - comments explain why the grid is capped at order `8` and why each block stays a packed `u16`
 - compile-time invariants protect the fixed `4 x 4` block layout
 
-This document describes the post-refactor API and design. It intentionally does not preserve the older camelCase API that existed before the TigerStyle cleanup.
-
 ## Grid Geometry
 
 The public grid type is:
@@ -127,7 +125,7 @@ The heap allocation happens at `allocator.create(Grid)`. `init_empty()` still do
 
 ### Why In-Place Initialization
 
-The older by-value constructors were removed during the TigerStyle cleanup.
+`BinaryGrid` uses in-place initialization methods such as `init_empty()` and `init_filled()`.
 
 - returning a fixed-size grid by value invites large accidental copies
 - in-place initialization keeps ownership and mutation explicit
@@ -248,7 +246,7 @@ y = index >> order
 
 This works because `blocks_per_side` is always a power of two.
 
-The public coordinate helpers are:
+The public coordinate and direction helpers are:
 
 ```zig
 pub const BlockCoord = struct {
@@ -259,6 +257,17 @@ pub const BlockCoord = struct {
 pub const CellCoord = struct {
     x: usize,
     y: usize,
+};
+
+pub const Direction = enum {
+    N,
+    NE,
+    E,
+    SE,
+    S,
+    SW,
+    W,
+    NW,
 };
 ```
 
@@ -272,6 +281,8 @@ pub fn block_coord_unchecked(index: usize) BlockCoord
 ```
 
 The checked forms return explicit errors. The unchecked forms use `std.debug.assert` and are intended for hot paths where the caller already knows the inputs are valid.
+
+`Direction` uses the same compass semantics as the Hilbert modules. `N` decreases `y`, `E` increases `x`, diagonals step both axes, and wrapped neighbor access treats the grid as a closed world.
 
 ## Global Cell Mapping
 
@@ -303,11 +314,21 @@ The public cell accessors are:
 ```zig
 pub fn get_cell(self: *const Self, coord: CellCoord) error{CellCoordOutOfRange}!bool
 pub fn get_cell_unchecked(self: *const Self, coord: CellCoord) bool
+pub fn get_cell_neighbor(self: *const Self, coord: CellCoord, direction: Direction) error{CellCoordOutOfRange}!bool
+pub fn get_cell_neighbor_unchecked(self: *const Self, coord: CellCoord, direction: Direction) bool
 pub fn set_cell(self: *Self, coord: CellCoord, value: bool) error{CellCoordOutOfRange}!void
 pub fn set_cell_unchecked(self: *Self, coord: CellCoord, value: bool) void
 ```
 
 The checked forms validate against `cells_per_side`. The unchecked forms go straight to block lookup and in-block bit access.
+
+The neighbor variants step one global cell in the requested direction and wrap across every edge. For example, on an `8 x 8` cell grid:
+
+```text
+(0, 0) + W  -> (7, 0)
+(0, 0) + N  -> (0, 7)
+(3, 3) + SE -> (4, 4)
+```
 
 ## Grid API
 
@@ -336,6 +357,8 @@ Block-level access:
 ```zig
 pub fn get_block(self: *const Self, index: usize) error{IndexOutOfRange}!Block
 pub fn get_block_unchecked(self: *const Self, index: usize) Block
+pub fn get_block_neighbor(self: *const Self, index: usize, direction: Direction) error{IndexOutOfRange}!Block
+pub fn get_block_neighbor_unchecked(self: *const Self, index: usize, direction: Direction) Block
 pub fn set_block(self: *Self, index: usize, value: Block) error{IndexOutOfRange}!void
 pub fn set_block_unchecked(self: *Self, index: usize, value: Block) void
 pub fn block_ptr(self: *Self, index: usize) error{IndexOutOfRange}!*Block
@@ -346,13 +369,14 @@ pub fn row_blocks(self: *Self, block_y: usize) error{BlockCoordOutOfRange}![]Blo
 pub fn row_blocks_unchecked(self: *Self, block_y: usize) []Block
 ```
 
-The pointer and row helpers are intentionally explicit and mutable-only. The module no longer uses `anytype` receivers or paired const-return-shape tricks here. That change keeps the API simpler and makes ownership and mutation visible at the call site.
+The pointer and row helpers are intentionally explicit and mutable-only. They keep the API simple and make ownership and mutation visible at the call site.
 
 These APIs exist to support data-oriented scans:
 
 - `row_blocks()` exposes one contiguous block row without recomputing per-block translations
 - `block_ptr()` and `block_ptr_at()` let callers mutate blocks in place instead of copying them out and writing them back
 - `get_block()` and `set_block()` keep checked whole-block reads and writes available when pointer access is not needed
+- `get_block_neighbor()` reads one adjacent block through the closed-world topology, so callers can scan neighborhood data without special boundary branches
 
 ## Coupled Grid And Block Design
 

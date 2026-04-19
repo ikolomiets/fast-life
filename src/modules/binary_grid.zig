@@ -81,6 +81,17 @@ pub const CellCoord = struct {
     y: usize,
 };
 
+pub const Direction = enum {
+    N,
+    NE,
+    E,
+    SE,
+    S,
+    SW,
+    W,
+    NW,
+};
+
 pub fn BinaryGrid(comptime grid_order: usize) type {
     const Shift = std.math.Log2Int(usize);
     if (grid_order > max_order) {
@@ -166,6 +177,19 @@ pub fn BinaryGrid(comptime grid_order: usize) type {
             return self.blocks[index];
         }
 
+        pub fn get_block_neighbor(self: *const Self, index: usize, direction: Direction) error{IndexOutOfRange}!Block {
+            try validate_block_index(index);
+            return self.get_block_neighbor_unchecked(index, direction);
+        }
+
+        pub fn get_block_neighbor_unchecked(self: *const Self, index: usize, direction: Direction) Block {
+            std.debug.assert(index < block_count);
+
+            const coord = block_coord_unchecked(index);
+            const neighbor = neighbor_block_coord(coord, direction);
+            return self.blocks[block_index_unchecked(neighbor)];
+        }
+
         pub fn set_block(self: *Self, index: usize, value: Block) error{IndexOutOfRange}!void {
             try validate_block_index(index);
             self.blocks[index] = value;
@@ -220,6 +244,19 @@ pub fn BinaryGrid(comptime grid_order: usize) type {
             return self.blocks[block_index_unchecked(parts.block)].get(parts.local_x, parts.local_y);
         }
 
+        pub fn get_cell_neighbor(self: *const Self, coord: CellCoord, direction: Direction) error{CellCoordOutOfRange}!bool {
+            try validate_cell_coord(coord);
+            return self.get_cell_neighbor_unchecked(coord, direction);
+        }
+
+        pub fn get_cell_neighbor_unchecked(self: *const Self, coord: CellCoord, direction: Direction) bool {
+            std.debug.assert(coord.x < cells_per_side);
+            std.debug.assert(coord.y < cells_per_side);
+
+            const neighbor = neighbor_cell_coord(coord, direction);
+            return self.get_cell_unchecked(neighbor);
+        }
+
         pub fn set_cell(self: *Self, coord: CellCoord, value: bool) error{CellCoordOutOfRange}!void {
             try validate_cell_coord(coord);
             self.set_cell_unchecked(coord, value);
@@ -248,6 +285,89 @@ pub fn BinaryGrid(comptime grid_order: usize) type {
                 .local_x = @intCast(coord.x & local_mask),
                 .local_y = @intCast(coord.y & local_mask),
             };
+        }
+
+        fn previous_axis(value: usize, limit: usize) usize {
+            std.debug.assert(limit != 0);
+            std.debug.assert(value < limit);
+
+            if (value == 0) {
+                return limit - 1;
+            }
+
+            return value - 1;
+        }
+
+        fn next_axis(value: usize, limit: usize) usize {
+            std.debug.assert(limit != 0);
+            std.debug.assert(value < limit);
+
+            if (value + 1 == limit) {
+                return 0;
+            }
+
+            return value + 1;
+        }
+
+        // BinaryGrid uses a closed-world topology, so every edge wraps to the opposite side.
+        fn neighbor_block_coord(coord: BlockCoord, direction: Direction) BlockCoord {
+            std.debug.assert(coord.x < blocks_per_side);
+            std.debug.assert(coord.y < blocks_per_side);
+
+            var neighbor = coord;
+            switch (direction) {
+                .N => neighbor.y = previous_axis(coord.y, blocks_per_side),
+                .NE => {
+                    neighbor.x = next_axis(coord.x, blocks_per_side);
+                    neighbor.y = previous_axis(coord.y, blocks_per_side);
+                },
+                .E => neighbor.x = next_axis(coord.x, blocks_per_side),
+                .SE => {
+                    neighbor.x = next_axis(coord.x, blocks_per_side);
+                    neighbor.y = next_axis(coord.y, blocks_per_side);
+                },
+                .S => neighbor.y = next_axis(coord.y, blocks_per_side),
+                .SW => {
+                    neighbor.x = previous_axis(coord.x, blocks_per_side);
+                    neighbor.y = next_axis(coord.y, blocks_per_side);
+                },
+                .W => neighbor.x = previous_axis(coord.x, blocks_per_side),
+                .NW => {
+                    neighbor.x = previous_axis(coord.x, blocks_per_side);
+                    neighbor.y = previous_axis(coord.y, blocks_per_side);
+                },
+            }
+            return neighbor;
+        }
+
+        fn neighbor_cell_coord(coord: CellCoord, direction: Direction) CellCoord {
+            std.debug.assert(coord.x < cells_per_side);
+            std.debug.assert(coord.y < cells_per_side);
+
+            var neighbor = coord;
+            switch (direction) {
+                .N => neighbor.y = previous_axis(coord.y, cells_per_side),
+                .NE => {
+                    neighbor.x = next_axis(coord.x, cells_per_side);
+                    neighbor.y = previous_axis(coord.y, cells_per_side);
+                },
+                .E => neighbor.x = next_axis(coord.x, cells_per_side),
+                .SE => {
+                    neighbor.x = next_axis(coord.x, cells_per_side);
+                    neighbor.y = next_axis(coord.y, cells_per_side);
+                },
+                .S => neighbor.y = next_axis(coord.y, cells_per_side),
+                .SW => {
+                    neighbor.x = previous_axis(coord.x, cells_per_side);
+                    neighbor.y = next_axis(coord.y, cells_per_side);
+                },
+                .W => neighbor.x = previous_axis(coord.x, cells_per_side),
+                .NW => {
+                    neighbor.x = previous_axis(coord.x, cells_per_side);
+                    neighbor.y = previous_axis(coord.y, cells_per_side);
+                },
+            }
+            return neighbor;
         }
 
         fn validate_block_index(index: usize) error{IndexOutOfRange}!void {
@@ -402,6 +522,47 @@ test "BinaryGrid global cell access crosses block boundaries" {
     try std.testing.expect((try grid.get_block(5)).get(0, 0));
 }
 
+test "BinaryGrid wrapped block neighbors cross edges and corners" {
+    const Grid = BinaryGrid(2);
+    var grid: Grid = undefined;
+    grid.init_empty();
+
+    var index: usize = 0;
+    while (index < Grid.block_count) : (index += 1) {
+        try grid.set_block(index, .{ .bits = @intCast(index + 1) });
+    }
+
+    try std.testing.expectEqual(@as(u16, 13), (try grid.get_block_neighbor(0, .N)).bits);
+    try std.testing.expectEqual(@as(u16, 2), (try grid.get_block_neighbor(0, .E)).bits);
+    try std.testing.expectEqual(@as(u16, 16), (try grid.get_block_neighbor(0, .NW)).bits);
+    try std.testing.expectEqual(@as(u16, 10), (try grid.get_block_neighbor(10, .W)).bits);
+    try std.testing.expectEqual(@as(u16, 8), (try grid.get_block_neighbor(10, .NE)).bits);
+    try std.testing.expectEqual(@as(u16, 16), (try grid.get_block_neighbor(10, .SE)).bits);
+}
+
+test "BinaryGrid wrapped cell neighbors cross block and grid boundaries" {
+    const Grid = BinaryGrid(1);
+    var grid: Grid = undefined;
+    grid.init_empty();
+
+    try grid.set_cell(.{ .x = 4, .y = 3 }, true);
+    try grid.set_cell(.{ .x = 3, .y = 4 }, true);
+    try grid.set_cell(.{ .x = 4, .y = 4 }, true);
+    try grid.set_cell(.{ .x = 7, .y = 0 }, true);
+    try grid.set_cell(.{ .x = 0, .y = 7 }, true);
+    try grid.set_cell(.{ .x = 7, .y = 7 }, true);
+
+    try std.testing.expect(try grid.get_cell_neighbor(.{ .x = 3, .y = 3 }, .E));
+    try std.testing.expect(try grid.get_cell_neighbor(.{ .x = 3, .y = 3 }, .S));
+    try std.testing.expect(try grid.get_cell_neighbor(.{ .x = 3, .y = 3 }, .SE));
+    try std.testing.expect(!(try grid.get_cell_neighbor(.{ .x = 3, .y = 3 }, .N)));
+
+    try std.testing.expect(try grid.get_cell_neighbor(.{ .x = 0, .y = 0 }, .W));
+    try std.testing.expect(try grid.get_cell_neighbor(.{ .x = 0, .y = 0 }, .N));
+    try std.testing.expect(try grid.get_cell_neighbor(.{ .x = 0, .y = 0 }, .NW));
+    try std.testing.expect(!(try grid.get_cell_neighbor(.{ .x = 0, .y = 0 }, .NE)));
+}
+
 test "BinaryGrid supports explicit in-place initialization and refill" {
     const Grid = BinaryGrid(1);
     var grid: Grid = undefined;
@@ -429,9 +590,11 @@ test "BinaryGrid checked APIs reject out-of-range coordinates and indices" {
     try std.testing.expectError(error.BlockCoordOutOfRange, Grid.block_index(.{ .x = 0, .y = 4 }));
     try std.testing.expectError(error.IndexOutOfRange, Grid.block_coord(Grid.block_count));
     try std.testing.expectError(error.IndexOutOfRange, grid.get_block(Grid.block_count));
+    try std.testing.expectError(error.IndexOutOfRange, grid.get_block_neighbor(Grid.block_count, .E));
     try std.testing.expectError(error.BlockCoordOutOfRange, grid.block_ptr_at(.{ .x = 0, .y = 4 }));
     try std.testing.expectError(error.BlockCoordOutOfRange, grid.row_blocks(Grid.blocks_per_side));
     try std.testing.expectError(error.CellCoordOutOfRange, grid.get_cell(.{ .x = Grid.cells_per_side, .y = 0 }));
+    try std.testing.expectError(error.CellCoordOutOfRange, grid.get_cell_neighbor(.{ .x = Grid.cells_per_side, .y = 0 }, .N));
     try std.testing.expectError(error.CellCoordOutOfRange, grid.get_cell(.{ .x = 0, .y = Grid.cells_per_side }));
     try std.testing.expectError(error.CellCoordOutOfRange, grid.set_cell(.{ .x = 0, .y = Grid.cells_per_side }, true));
 }
@@ -455,4 +618,31 @@ test "BinaryGrid accepts last valid block and cell coordinates" {
 
     try grid.set_cell(last_cell, true);
     try std.testing.expect(try grid.get_cell(last_cell));
+}
+
+test "BinaryGrid order zero wraps block and cell neighbors onto itself" {
+    const Grid = BinaryGrid(0);
+    var grid: Grid = undefined;
+    grid.init_empty();
+
+    const directions = [_]Direction{ .N, .NE, .E, .SE, .S, .SW, .W, .NW };
+    const block = Block{ .bits = 0x00f0 };
+    try grid.set_block(0, block);
+
+    for (directions) |direction| {
+        try std.testing.expectEqualDeep(block, try grid.get_block_neighbor(0, direction));
+    }
+
+    try grid.set_cell(.{ .x = 0, .y = 3 }, true);
+    try grid.set_cell(.{ .x = 1, .y = 3 }, true);
+    try grid.set_cell(.{ .x = 1, .y = 0 }, true);
+    try grid.set_cell(.{ .x = 1, .y = 1 }, true);
+    try grid.set_cell(.{ .x = 0, .y = 1 }, true);
+    try grid.set_cell(.{ .x = 3, .y = 1 }, true);
+    try grid.set_cell(.{ .x = 3, .y = 0 }, true);
+    try grid.set_cell(.{ .x = 3, .y = 3 }, true);
+
+    for (directions) |direction| {
+        try std.testing.expect(try grid.get_cell_neighbor(.{ .x = 0, .y = 0 }, direction));
+    }
 }
