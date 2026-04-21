@@ -258,7 +258,7 @@ This module intentionally does not provide:
 - rotation, reflection, or translation helpers
 - rule persistence in `Pattern`
 - comment preservation in `Pattern`
-- top-level integration with the combined Hilbert CLI in `src/main.zig`
+- top-level integration with the Game of Life CLI in `src/main.zig`
 
 Those concerns stay outside the current RLE layer.
 

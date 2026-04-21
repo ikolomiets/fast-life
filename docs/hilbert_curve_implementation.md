@@ -14,7 +14,7 @@ The Zig code lives in:
 - `src/modules/binary_grid.zig` for the built-in packed 4x4 block type and dense binary-grid API
 - `src/modules/hilbert_curve.zig` for the core Hilbert mapping API and inline tests
 - `src/modules/hilbert_neighbors.zig` for neighbor-distance analysis and inline tests
-- `src/main.zig` for the combined top-level command-line router
+- `src/main.zig` for the top-level Game of Life CLI
 - `build.zig` for build, run, and test integration
 
 The Hilbert implementation is iterative, allocation-free, and close to the standard reference algorithm. This document focuses on the Hilbert mapping and neighbor-reporting modules. For the separate dense binary-grid design built into the same package root, see `docs/binary_grid_design.md`.
@@ -435,40 +435,40 @@ Neighbor lookup is handled by a private `neighbor_point(n, point, dir)` helper i
 
 ## Command-Line Entry Point
 
-The CLI is split across a thin top-level router in `src/main.zig` and module-owned entry points in `src/modules/hilbert_curve.zig` and `src/modules/hilbert_neighbors.zig`:
+The Hilbert tools keep module-owned standalone entry points in `src/modules/hilbert_curve.zig` and `src/modules/hilbert_neighbors.zig`:
 
 ```text
-zig build run -- 2
-zig build run -- curve 2
-zig build run -- neighbors 2
-zig build run -- neighbors histogram 2
-zig build run -- neighbors histogram 2 kind orthogonal
-zig build run -- neighbors histogram 2 max-distance 4
-zig build run -- neighbors histogram 2 kind diagonal max-distance 4
-zig build run -- neighbors histogram 2 max-distance 4 kind diagonal
+zig run src/modules/hilbert_curve.zig -- 2
+zig run src/modules/hilbert_curve.zig -- curve 2
+zig run src/modules/hilbert_neighbors.zig -- 2
+zig run src/modules/hilbert_neighbors.zig -- histogram 2
+zig run src/modules/hilbert_neighbors.zig -- histogram 2 kind orthogonal
+zig run src/modules/hilbert_neighbors.zig -- histogram 2 max-distance 4
+zig run src/modules/hilbert_neighbors.zig -- histogram 2 kind diagonal max-distance 4
+zig run src/modules/hilbert_neighbors.zig -- histogram 2 max-distance 4 kind diagonal
 ```
 
 Behavior:
 
-- `zig build run -- <order>` prints the plain Hilbert traversal
-- `zig build run -- curve <order>` does the same explicitly
-- `zig build run -- neighbors <order>` prints Moore-neighbor distances
-- `zig build run -- neighbors histogram <order>` prints the histogram of neighbor distances
-- `zig build run -- neighbors histogram <order> kind <all|orthogonal|diagonal>` filters the histogram by neighbor kind and appends a final cumulative percentage row
-- `zig build run -- neighbors histogram <order> max-distance <distance>` filters by inclusive distance and appends a final cumulative percentage row
+- `zig run src/modules/hilbert_curve.zig -- <order>` prints the plain Hilbert traversal
+- `zig run src/modules/hilbert_curve.zig -- curve <order>` does the same explicitly
+- `zig run src/modules/hilbert_neighbors.zig -- <order>` prints Moore-neighbor distances
+- `zig run src/modules/hilbert_neighbors.zig -- histogram <order>` prints the histogram of neighbor distances
+- `zig run src/modules/hilbert_neighbors.zig -- histogram <order> kind <all|orthogonal|diagonal>` filters the histogram by neighbor kind and appends a final cumulative percentage row
+- `zig run src/modules/hilbert_neighbors.zig -- histogram <order> max-distance <distance>` filters by inclusive distance and appends a final cumulative percentage row
 - `kind` and `max-distance` may be combined in either order
 - prints usage to stderr on missing, malformed, or extra arguments
 - prints usage again when `order > 8`
 - writes the selected report to stdout
 
-`src/main.zig`, `src/modules/hilbert_curve.zig`, and `src/modules/hilbert_neighbors.zig` all use Zig `0.16.0` process and I/O initialization for their executable entry points:
+`src/modules/hilbert_curve.zig` and `src/modules/hilbert_neighbors.zig` both use Zig `0.16.0` process and I/O initialization for their executable entry points:
 
 - `pub fn main(init: std.process.Init) !void`
 - `init.minimal.args.toSlice(init.arena.allocator())` for CLI args
 - `std.Io.File.stdout().writer(init.io, &buffer)` for buffered curve output
 - `std.Io.File.stderr().writer(init.io, &.{})` for short unbuffered usage messages
 
-The top-level router strips the `curve` and `neighbors` prefixes before delegating to `hilbert_curve.run_cli` and `hilbert_neighbors.run_cli`, prints the combined usage text on `error.InvalidUsage` and `error.InvalidOrder`, and explicitly flushes stdout before exiting. Each module also exposes its own standalone `main(init)` entrypoint, so the source files can be executed directly with `zig run`.
+The top-level executable in `src/main.zig` now targets the Game of Life CLI. Hilbert functionality remains available through these standalone module entry points.
 
 ## Performance Characteristics
 
@@ -485,7 +485,7 @@ Within this repository's `order <= 8` constraint, each transform completes in at
 
 ## Tests
 
-Tests live inline in `src/modules/hilbert_curve.zig`, `src/modules/hilbert_neighbors.zig`, `src/root.zig`, and `src/main.zig` and run with:
+Tests live inline in `src/modules/hilbert_curve.zig`, `src/modules/hilbert_neighbors.zig`, and `src/root.zig` and run with:
 
 ```text
 zig build test
@@ -518,11 +518,11 @@ TigerStyle in this repository uses `snake_case` for functions, variables, and fi
 
 `build.zig` defines three normal Zig workflows:
 
-- `zig build` to compile the executable
-- `zig build run -- <order>` to run the generator
+- `zig build` to compile the top-level executable
+- `zig build run -- <steps> <input-rle-path> <output-rle-path>` to run the Game of Life CLI
 - `zig build test` to execute the unit tests
 
-It also defines the canonical `fast_life` package import rooted at `src/root.zig`. The combined executable is named `hilbert_curve`, and the module sources can be run directly as standalone entry points with `zig run src/modules/hilbert_curve.zig -- ...` and `zig run src/modules/hilbert_neighbors.zig -- ...`.
+It also defines the canonical `fast_life` package import rooted at `src/root.zig`. The top-level executable is named `fast_life`, and the Hilbert module sources can be run directly as standalone entry points with `zig run src/modules/hilbert_curve.zig -- ...` and `zig run src/modules/hilbert_neighbors.zig -- ...`.
 
 ## Summary
 

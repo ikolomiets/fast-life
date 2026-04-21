@@ -1,6 +1,7 @@
 const std = @import("std");
 
 pub const binary_grid = @import("modules/binary_grid.zig");
+pub const game_of_life = @import("modules/game_of_life.zig");
 pub const hilbert_curve = @import("modules/hilbert_curve.zig");
 pub const hilbert_neighbors = @import("modules/hilbert_neighbors.zig");
 pub const life_rle = @import("modules/life_rle.zig");
@@ -43,4 +44,17 @@ test "package_root_exposes_life_rle_module" {
     try std.testing.expectEqual(@as(usize, 1), pattern.height);
     try std.testing.expectEqual(@as(usize, 1), pattern.live_cells.len);
     try std.testing.expectEqualDeep(life_rle.PatternCell{ .x = 0, .y = 0 }, pattern.live_cells[0]);
+}
+
+test "package_root_exposes_game_of_life_module" {
+    const Game = game_of_life.GameOfLife(0);
+    var life: Game = undefined;
+
+    const grid = life.init_generation_zero_grid();
+    try grid.set_cell(.{ .x = 1, .y = 2 }, true);
+
+    try std.testing.expectEqual(@as(u64, 0), life.generation);
+    try std.testing.expect(try life.current_grid().get_cell(.{ .x = 1, .y = 2 }));
+    try std.testing.expect(game_of_life.next_state(false, 3));
+    try std.testing.expectEqual(game_of_life.Transition.death, game_of_life.next_transition(true, 4));
 }

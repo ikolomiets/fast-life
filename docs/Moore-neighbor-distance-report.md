@@ -9,7 +9,7 @@ Relevant code:
 - `src/modules/hilbert_curve.zig` contains the core Hilbert types and mapping functions
 - `src/modules/hilbert_neighbors.zig` contains neighbor lookup, histogram logic, and report writers
 - `src/root.zig` re-exports the canonical modules
-- `src/main.zig` exposes the combined CLI, while `src/modules/hilbert_neighbors.zig` also has its own standalone executable entry point
+- `src/modules/hilbert_neighbors.zig` exposes the standalone neighbor-report CLI
 
 The report walks the Hilbert curve from index `0` through `max_index(order)` and, for every visited cell, prints one line describing the Hilbert-curve distance to each of that cell's Moore neighbors.
 
@@ -147,7 +147,7 @@ Internally the implementation accumulates counts in a fixed array indexed by dis
 Histogram mode supports an optional neighbor-kind filter:
 
 ```text
-zig build run -- neighbors histogram <order> kind <all|orthogonal|diagonal>
+zig run src/modules/hilbert_neighbors.zig -- histogram <order> kind <all|orthogonal|diagonal>
 ```
 
 Behavior:
@@ -176,7 +176,7 @@ cumulative_percentage=66.67%
 Histogram mode also supports an optional inclusive distance cutoff:
 
 ```text
-zig build run -- neighbors histogram <order> max-distance <distance>
+zig run src/modules/hilbert_neighbors.zig -- histogram <order> max-distance <distance>
 ```
 
 Behavior:
@@ -193,8 +193,8 @@ Behavior:
 `kind` and `max-distance` may be provided together in either order:
 
 ```text
-zig build run -- neighbors histogram <order> kind <kind> max-distance <distance>
-zig build run -- neighbors histogram <order> max-distance <distance> kind <kind>
+zig run src/modules/hilbert_neighbors.zig -- histogram <order> kind <kind> max-distance <distance>
+zig run src/modules/hilbert_neighbors.zig -- histogram <order> max-distance <distance> kind <kind>
 ```
 
 The `max-distance` cutoff is applied after the `kind` selection.
@@ -233,34 +233,30 @@ d=3 pos=(1,0) N=- NE=- E=- SE=- S=1 SW=2 W=3 NW=-
 
 ## CLI Integration
 
-The executable supports these forms:
+The standalone module entry point supports these forms:
 
 ```text
-zig build run -- <order>
-zig build run -- curve <order>
-zig build run -- neighbors <order>
-zig build run -- neighbors histogram <order>
-zig build run -- neighbors histogram <order> kind <all|orthogonal|diagonal>
-zig build run -- neighbors histogram <order> max-distance <distance>
-zig build run -- neighbors histogram <order> kind <all|orthogonal|diagonal> max-distance <distance>
-zig build run -- neighbors histogram <order> max-distance <distance> kind <all|orthogonal|diagonal>
+zig run src/modules/hilbert_neighbors.zig -- <order>
+zig run src/modules/hilbert_neighbors.zig -- histogram <order>
+zig run src/modules/hilbert_neighbors.zig -- histogram <order> kind <all|orthogonal|diagonal>
+zig run src/modules/hilbert_neighbors.zig -- histogram <order> max-distance <distance>
+zig run src/modules/hilbert_neighbors.zig -- histogram <order> kind <all|orthogonal|diagonal> max-distance <distance>
+zig run src/modules/hilbert_neighbors.zig -- histogram <order> max-distance <distance> kind <all|orthogonal|diagonal>
 ```
 
 Mode behavior:
 
-- `<order>` keeps the original plain curve output
-- `curve <order>` is an explicit alias for the original mode
-- `neighbors <order>` emits the Moore-neighbor distance report
-- `neighbors histogram <order>` emits the histogram of neighbor distances
-- `neighbors histogram <order> kind <kind>` emits only the selected kind and a final cumulative percentage row
-- `neighbors histogram <order> max-distance <distance>` emits only distances `1..max_distance` and a final cumulative percentage row
+- `<order>` emits the Moore-neighbor distance report
+- `histogram <order>` emits the histogram of neighbor distances
+- `histogram <order> kind <kind>` emits only the selected kind and a final cumulative percentage row
+- `histogram <order> max-distance <distance>` emits only distances `1..max_distance` and a final cumulative percentage row
 - the two histogram filters may be combined in either order
 
-Neighbor-specific argument parsing is handled in `src/modules/hilbert_neighbors.zig` by `run_cli`, which is used both by the standalone module `main(init)` entry point and by the top-level router in `src/main.zig`. `src/main.zig` only routes the top-level mode and prints combined usage text for invalid requests.
+Neighbor-specific argument parsing is handled in `src/modules/hilbert_neighbors.zig` by `run_cli`, which is used by the standalone module `main(init)` entry point.
 
 ## Tests
 
-The implementation is covered by unit tests in `src/modules/hilbert_curve.zig`, `src/modules/hilbert_neighbors.zig`, `src/root.zig`, and `src/main.zig`.
+The implementation is covered by unit tests in `src/modules/hilbert_curve.zig`, `src/modules/hilbert_neighbors.zig`, and `src/root.zig`.
 
 Neighbor-report-specific coverage includes:
 

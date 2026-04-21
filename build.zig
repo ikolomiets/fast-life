@@ -16,7 +16,7 @@ pub fn build(b: *std.Build) void {
     });
     exe_module.addImport("fast_life", fast_life_module);
     const exe = b.addExecutable(.{
-        .name = "hilbert_curve",
+        .name = "fast_life",
         .root_module = exe_module,
     });
     b.installArtifact(exe);
@@ -26,7 +26,7 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
-    const run_step = b.step("run", "Run the Hilbert curve generator");
+    const run_step = b.step("run", "Run the Game of Life CLI");
     run_step.dependOn(&run_cmd.step);
 
     const package_tests = b.addTest(.{
