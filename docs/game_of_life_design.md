@@ -10,9 +10,13 @@ Relevant code:
 - `src/modules/game_of_life.zig` contains the stateful automaton shell and its inline tests
 - `src/main.zig` contains the top-level Game of Life CLI
 - `src/modules/binary_grid.zig` provides the packed `BinaryGrid(order)` storage used for both buffers
+- `docs/lut_block_inference_design.md` describes the current block-LUT stepping path in detail
 
 The module keeps the state layout intentionally small and explicit, and now implements one full
-Conway Life step over the packed `BinaryGrid(order)` storage.
+Conway Life step over the packed `BinaryGrid(order)` storage in two forms:
+
+- `step()` is the original cell-wise baseline
+- `step_block()` is the block-wise LUT-based alternative
 
 ## Public Type
 
@@ -88,14 +92,29 @@ helper that seeds cells, applies an RLE pattern, or performs some other setup st
 The initial public methods are:
 
 ```zig
+pub fn init_runtime_luts() void
 pub fn clear(self: *Self) void
 pub fn current_grid(self: *const Self) *const Grid
 pub fn current_grid_mut(self: *Self) *Grid
 pub fn step(self: *Self) void
+pub fn step_block(self: *Self) void
 ```
 
 `clear()` is the reset alias for `init_empty()`. The two current-grid accessors expose the buffer
 selected by generation parity.
+
+The module also exposes the public block helper used by `step_block()`:
+
+```zig
+pub const BlockNeighborhood = struct { ... };
+pub fn infer_next_block_from_neighborhood(
+    neighborhood: BlockNeighborhood,
+) binary_grid.Block
+```
+
+`init_runtime_luts()` eagerly builds the runtime `4 x 4 -> inner 2 x 2` LUT used by both
+`infer_next_block_from_neighborhood(...)` and `step_block()`. It is idempotent, but it must be
+called before either block-LUT entry point is used.
 
 The module also exposes two public rule helpers plus a transition enum:
 
@@ -108,7 +127,7 @@ pub fn next_transition(current_state: bool, alive_neighbors: u4) Transition
 `next_state()` is the canonical boolean encoding of Conway Life's per-cell rule. `next_transition()`
 wraps that result and classifies it as no change, birth, or death.
 
-`step()` now performs one full Conway Life generation update.
+`step()` performs one full Conway Life generation update with the original cell-wise algorithm.
 
 Its internal strategy is:
 
@@ -124,8 +143,24 @@ The copy-first approach keeps the control flow simple: unchanged cells are alrea
 next buffer, so the scan only needs to write births and deaths. Neighbor reads always come from the
 current buffer, so each step observes a stable source generation.
 
-`BinaryGrid` uses a closed-world topology, so `step()` also wraps across every edge. There is no
-special dead boundary.
+`step_block()` performs the same generation update block-by-block instead:
+
+1. verify that `init_runtime_luts()` has already run
+2. select current and next buffers from generation parity
+3. iterate over every source block
+4. gather the wrapped `3 x 3` `BlockNeighborhood` around that block
+5. compute the next-state block with `infer_next_block_from_neighborhood(...)`
+6. write the returned block directly into the next buffer
+7. increment `generation`
+
+`step_block()` does not copy the current grid first because it overwrites every block in the next
+buffer directly.
+
+`BinaryGrid` uses a closed-world topology, so both stepping paths wrap across every edge. There is
+no special dead boundary.
+
+The detailed LUT/block algorithm behind `infer_next_block_from_neighborhood(...)` and
+`step_block()` is documented in [lut_block_inference_design.md](lut_block_inference_design.md).
 
 ## Top-Level CLI
 
@@ -140,15 +175,16 @@ The current CLI uses a fixed `GameOfLife(8)` instance. Its flow is:
 1. parse the steps argument as an unsigned integer
 2. parse the input file with `life_rle.parse_pattern_file(...)`
 3. reject declared pattern bounds larger than `1024 x 1024`
-4. initialize generation `0` with `init_generation_zero_grid()`
-5. apply the parsed pattern at coordinate `(400, 400)` with `life_rle.apply_pattern(...)`
-6. run `step()` exactly the requested number of times
-7. write `current_grid()` back out as canonical RLE with `life_rle.write_grid(...)`
-8. print a timing summary to stdout
+4. call `game_of_life.init_runtime_luts()` once at process startup
+5. initialize generation `0` with `init_generation_zero_grid()`
+6. apply the parsed pattern at coordinate `(400, 400)` with `life_rle.apply_pattern(...)`
+7. run `step_block()` exactly the requested number of times
+8. write `current_grid()` back out as canonical RLE with `life_rle.write_grid(...)`
+9. print a timing summary to stdout
 
-The timing covers only the stepping loop. It starts immediately before the first `step()` call and
-ends immediately after the last one. Input parsing, initial pattern application, final file output,
-and stdout reporting are not part of the measured interval.
+The timing covers only the stepping loop. It starts immediately before the first `step_block()`
+call and ends immediately after the last one. Input parsing, runtime LUT initialization, initial
+pattern application, final file output, and stdout reporting are not part of the measured interval.
 
 The stdout format is:
 

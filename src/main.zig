@@ -108,7 +108,7 @@ fn run_cli_with_writer(
 
         var step_index: u64 = 0;
         while (step_index < steps) : (step_index += 1) {
-            cli_life.step();
+            cli_life.step_block();
         }
 
         elapsed = start.durationTo(std.Io.Clock.awake.now(io));
@@ -132,6 +132,8 @@ pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
     const args = try init.minimal.args.toSlice(allocator);
     const exe_name = if (args.len != 0) args[0] else "fast_life";
+
+    game_of_life.init_runtime_luts();
 
     var stderr = std.Io.File.stderr().writer(io, &.{});
     const stderr_w = &stderr.interface;
@@ -197,6 +199,7 @@ test "write_timing_summary prints zero throughput when elapsed time is zero" {
 }
 
 test "run_cli rewrites generation zero output and reports zero timing" {
+    game_of_life.init_runtime_luts();
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
@@ -239,6 +242,7 @@ test "run_cli rewrites generation zero output and reports zero timing" {
 }
 
 test "run_cli advances requested generations and reports timing summary" {
+    game_of_life.init_runtime_luts();
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 

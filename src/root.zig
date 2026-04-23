@@ -57,4 +57,25 @@ test "package_root_exposes_game_of_life_module" {
     try std.testing.expect(try life.current_grid().get_cell(.{ .x = 1, .y = 2 }));
     try std.testing.expect(game_of_life.next_state(false, 3));
     try std.testing.expectEqual(game_of_life.Transition.death, game_of_life.next_transition(true, 4));
+
+    game_of_life.init_runtime_luts();
+    const step_block_fn: *const fn (*Game) void = Game.step_block;
+    _ = step_block_fn;
+
+    const neighborhood = game_of_life.BlockNeighborhood{
+        .nw = binary_grid.Block.empty(),
+        .n = binary_grid.Block.empty(),
+        .ne = binary_grid.Block.empty(),
+        .w = binary_grid.Block.empty(),
+        .center = .{ .bits = 0x0660 },
+        .e = binary_grid.Block.empty(),
+        .sw = binary_grid.Block.empty(),
+        .s = binary_grid.Block.empty(),
+        .se = binary_grid.Block.empty(),
+    };
+
+    try std.testing.expectEqual(
+        @as(u16, 0x0660),
+        game_of_life.infer_next_block_from_neighborhood(neighborhood).bits,
+    );
 }
