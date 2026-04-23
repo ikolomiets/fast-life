@@ -51,7 +51,8 @@ pub fn step_block(self: *Self) void
 `infer_next_block_from_neighborhood(...)` returns the full next-state `4 x 4` block for
 `neighborhood.center`.
 
-`step_block()` applies that helper across the whole wrapped grid, one source block at a time.
+`step_block()` uses the same LUT stack across the whole wrapped grid, but its hot loop now bypasses
+`BlockNeighborhood` construction and calls a private raw-bits helper directly.
 
 ## Geometry And Bit Layout
 
@@ -146,31 +147,32 @@ next_center_lut[@as(usize, block_bits)]
 The optimized block helper does:
 
 1. verify that `init_runtime_luts()` has run
-2. extract the border rows, center rows, edge columns, and corner bits from `BlockNeighborhood`
-3. pack four overlapping `4 x 4` windows with `direct_block_windows(...)`
+2. forward the nine source block bitfields into the private
+   `infer_next_block_from_bits_initialized(...)` helper
+3. pack four overlapping `4 x 4` windows with `direct_block_windows_from_bits(...)`
 4. look each window up in `next_center_lut`
 5. assemble the four `u4` quadrant results into one returned `binary_grid.Block`
 
 ### Direct Window Extraction
 
-`direct_block_windows(...)` first extracts:
+`direct_block_windows_from_bits(...)` first extracts:
 
 ```zig
-north_row = neighborhood.n.row_mask(3)
-south_row = neighborhood.s.row_mask(0)
+north_row = block_row_mask(n_bits, 3)
+south_row = block_row_mask(s_bits, 0)
 
-center_row_0 = neighborhood.center.row_mask(0)
-center_row_1 = neighborhood.center.row_mask(1)
-center_row_2 = neighborhood.center.row_mask(2)
-center_row_3 = neighborhood.center.row_mask(3)
+center_row_0 = block_row_mask(center_bits, 0)
+center_row_1 = block_row_mask(center_bits, 1)
+center_row_2 = block_row_mask(center_bits, 2)
+center_row_3 = block_row_mask(center_bits, 3)
 
-west_edge_bits = block_right_column_bits(neighborhood.w.bits)
-east_edge_bits = block_left_column_bits(neighborhood.e.bits)
+west_edge_bits = block_right_column_bits(w_bits)
+east_edge_bits = block_left_column_bits(e_bits)
 
-nw_corner = (neighborhood.nw.bits >> 15) & 1
-ne_corner = (neighborhood.ne.bits >> 12) & 1
-sw_corner = (neighborhood.sw.bits >> 3) & 1
-se_corner = neighborhood.se.bits & 1
+nw_corner = (nw_bits >> 15) & 1
+ne_corner = (ne_bits >> 12) & 1
+sw_corner = (sw_bits >> 3) & 1
+se_corner = se_bits & 1
 ```
 
 The four required windows are:
@@ -249,15 +251,27 @@ The quadrant shifts are:
 
 ## Whole-Grid Integration In `step_block()`
 
-`GameOfLife.step_block()` applies the same helper across the whole wrapped grid:
+`GameOfLife.step_block()` no longer builds a `BlockNeighborhood` for each output block.
+
+Its hot loop does:
 
 1. verify the runtime LUT is initialized
 2. select current and next buffers by generation parity
-3. iterate over every block index in the current grid
-4. gather that block's wrapped `BlockNeighborhood`
-5. compute the next block with `infer_next_block_from_neighborhood(...)`
-6. write the next block directly into the next buffer
-7. increment `generation`
+3. iterate over block rows
+4. fetch three wrapped source row slices once for that output row:
+   - previous row
+   - current row
+   - next row
+5. initialize rolling `west`, `center`, and `east` block-bit registers for each source row
+6. sweep left-to-right across the output row
+7. call `infer_next_block_from_bits_initialized(...)` for the current `3 x 3` block neighborhood
+8. rotate the rolling registers and load only the new east-column source blocks
+9. write the returned block directly into the next buffer
+10. increment `generation`
+
+This removes the repeated wrapped-coordinate work from the hot loop. The public
+`infer_next_block_from_neighborhood(...)` entry point still exists for callers that already have a
+materialized `BlockNeighborhood`, but `step_block()` uses the lower-level raw-bits path directly.
 
 Unlike the baseline `step()`, `step_block()` does not copy the current grid first. It overwrites
 every block in the next buffer directly.

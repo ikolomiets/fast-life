@@ -147,14 +147,17 @@ current buffer, so each step observes a stable source generation.
 
 1. verify that `init_runtime_luts()` has already run
 2. select current and next buffers from generation parity
-3. iterate over every source block
-4. gather the wrapped `3 x 3` `BlockNeighborhood` around that block
-5. compute the next-state block with `infer_next_block_from_neighborhood(...)`
-6. write the returned block directly into the next buffer
-7. increment `generation`
+3. iterate over block rows
+4. fetch the wrapped previous/current/next source row slices once for that output row
+5. sweep left-to-right with rolling `west`, `center`, and `east` source block registers
+6. compute each next-state block through the private raw-bits block-LUT helper
+7. write the returned block directly into the next buffer
+8. increment `generation`
 
 `step_block()` does not copy the current grid first because it overwrites every block in the next
-buffer directly.
+buffer directly. The public `infer_next_block_from_neighborhood(...)` helper is still available,
+but the production stepping loop bypasses `BlockNeighborhood` construction in order to avoid
+recomputing wrapped block coordinates for every output block.
 
 `BinaryGrid` uses a closed-world topology, so both stepping paths wrap across every edge. There is
 no special dead boundary.

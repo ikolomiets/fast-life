@@ -199,13 +199,49 @@ pub fn GameOfLife(comptime grid_order: usize) type {
             const current = &self.grids[current_buffer_index];
             const next = &self.grids[next_buffer_index];
 
-            var block_index: usize = 0;
-            while (block_index < Grid.block_count) : (block_index += 1) {
-                const neighborhood = block_neighborhood(current, block_index);
-                next.set_block_unchecked(
-                    block_index,
-                    infer_next_block_from_neighborhood_initialized(neighborhood),
-                );
+            var block_y: usize = 0;
+            while (block_y < Grid.blocks_per_side) : (block_y += 1) {
+                const north_row = row_blocks_const_unchecked(current, previous_block_axis(block_y));
+                const center_row = row_blocks_const_unchecked(current, block_y);
+                const south_row = row_blocks_const_unchecked(current, next_block_axis(block_y));
+                const next_row = next.row_blocks_unchecked(block_y);
+
+                var north_west_bits = north_row[Grid.blocks_per_side - 1].bits;
+                var north_center_bits = north_row[0].bits;
+                var north_east_bits = north_row[next_block_axis(0)].bits;
+                var west_bits = center_row[Grid.blocks_per_side - 1].bits;
+                var center_bits = center_row[0].bits;
+                var east_bits = center_row[next_block_axis(0)].bits;
+                var south_west_bits = south_row[Grid.blocks_per_side - 1].bits;
+                var south_center_bits = south_row[0].bits;
+                var south_east_bits = south_row[next_block_axis(0)].bits;
+
+                var block_x: usize = 0;
+                while (block_x < Grid.blocks_per_side) : (block_x += 1) {
+                    next_row[block_x] = infer_next_block_from_bits_initialized(
+                        north_west_bits,
+                        north_center_bits,
+                        north_east_bits,
+                        west_bits,
+                        center_bits,
+                        east_bits,
+                        south_west_bits,
+                        south_center_bits,
+                        south_east_bits,
+                    );
+
+                    north_west_bits = north_center_bits;
+                    north_center_bits = north_east_bits;
+                    west_bits = center_bits;
+                    center_bits = east_bits;
+                    south_west_bits = south_center_bits;
+                    south_center_bits = south_east_bits;
+
+                    const east_block_x = next_block_axis(next_block_axis(block_x));
+                    north_east_bits = north_row[east_block_x].bits;
+                    east_bits = center_row[east_block_x].bits;
+                    south_east_bits = south_row[east_block_x].bits;
+                }
             }
 
             const generation, const overflow = @addWithOverflow(self.generation, 1);
@@ -239,20 +275,31 @@ pub fn GameOfLife(comptime grid_order: usize) type {
             return count;
         }
 
-        fn block_neighborhood(current: *const Grid, block_index: usize) BlockNeighborhood {
-            std.debug.assert(block_index < Grid.block_count);
+        fn row_blocks_const_unchecked(current: *const Grid, block_y: usize) []const binary_grid.Block {
+            std.debug.assert(block_y < Grid.blocks_per_side);
 
-            return .{
-                .nw = current.get_block_neighbor_unchecked(block_index, .NW),
-                .n = current.get_block_neighbor_unchecked(block_index, .N),
-                .ne = current.get_block_neighbor_unchecked(block_index, .NE),
-                .w = current.get_block_neighbor_unchecked(block_index, .W),
-                .center = current.get_block_unchecked(block_index),
-                .e = current.get_block_neighbor_unchecked(block_index, .E),
-                .sw = current.get_block_neighbor_unchecked(block_index, .SW),
-                .s = current.get_block_neighbor_unchecked(block_index, .S),
-                .se = current.get_block_neighbor_unchecked(block_index, .SE),
-            };
+            const row_start = block_y * Grid.blocks_per_side;
+            return current.blocks[row_start .. row_start + Grid.blocks_per_side];
+        }
+
+        fn previous_block_axis(value: usize) usize {
+            std.debug.assert(value < Grid.blocks_per_side);
+
+            if (value == 0) {
+                return Grid.blocks_per_side - 1;
+            }
+
+            return value - 1;
+        }
+
+        fn next_block_axis(value: usize) usize {
+            std.debug.assert(value < Grid.blocks_per_side);
+
+            if (value + 1 == Grid.blocks_per_side) {
+                return 0;
+            }
+
+            return value + 1;
         }
     };
 }
@@ -277,7 +324,41 @@ pub fn next_transition(current_state: bool, alive_neighbors: u4) Transition {
 }
 
 fn infer_next_block_from_neighborhood_initialized(neighborhood: BlockNeighborhood) binary_grid.Block {
-    const windows = direct_block_windows(neighborhood);
+    return infer_next_block_from_bits_initialized(
+        neighborhood.nw.bits,
+        neighborhood.n.bits,
+        neighborhood.ne.bits,
+        neighborhood.w.bits,
+        neighborhood.center.bits,
+        neighborhood.e.bits,
+        neighborhood.sw.bits,
+        neighborhood.s.bits,
+        neighborhood.se.bits,
+    );
+}
+
+fn infer_next_block_from_bits_initialized(
+    nw_bits: u16,
+    n_bits: u16,
+    ne_bits: u16,
+    w_bits: u16,
+    center_bits: u16,
+    e_bits: u16,
+    sw_bits: u16,
+    s_bits: u16,
+    se_bits: u16,
+) binary_grid.Block {
+    const windows = direct_block_windows_from_bits(
+        nw_bits,
+        n_bits,
+        ne_bits,
+        w_bits,
+        center_bits,
+        e_bits,
+        sw_bits,
+        s_bits,
+        se_bits,
+    );
     const next_nw = infer_next_center_bits_from_runtime_lut(windows.nw);
     const next_ne = infer_next_center_bits_from_runtime_lut(windows.ne);
     const next_sw = infer_next_center_bits_from_runtime_lut(windows.sw);
@@ -401,19 +482,47 @@ fn pack_window_rows(row_0: u4, row_1: u4, row_2: u4, row_3: u4) u16 {
         (@as(u16, row_3) << 12);
 }
 
+fn block_row_mask(block_bits: u16, y: binary_grid.Block.LocalCoord) u4 {
+    return @intCast((block_bits >> (@as(u4, y) << binary_grid.Block.side_shift)) & 0b1111);
+}
+
 fn direct_block_windows(neighborhood: BlockNeighborhood) BlockWindowSet {
-    const north_row = neighborhood.n.row_mask(3);
-    const south_row = neighborhood.s.row_mask(0);
-    const center_row_0 = neighborhood.center.row_mask(0);
-    const center_row_1 = neighborhood.center.row_mask(1);
-    const center_row_2 = neighborhood.center.row_mask(2);
-    const center_row_3 = neighborhood.center.row_mask(3);
-    const west_edge_bits = block_right_column_bits(neighborhood.w.bits);
-    const east_edge_bits = block_left_column_bits(neighborhood.e.bits);
-    const nw_corner: u1 = @intCast((neighborhood.nw.bits >> 15) & 1);
-    const ne_corner: u1 = @intCast((neighborhood.ne.bits >> 12) & 1);
-    const sw_corner: u1 = @intCast((neighborhood.sw.bits >> 3) & 1);
-    const se_corner: u1 = @intCast(neighborhood.se.bits & 1);
+    return direct_block_windows_from_bits(
+        neighborhood.nw.bits,
+        neighborhood.n.bits,
+        neighborhood.ne.bits,
+        neighborhood.w.bits,
+        neighborhood.center.bits,
+        neighborhood.e.bits,
+        neighborhood.sw.bits,
+        neighborhood.s.bits,
+        neighborhood.se.bits,
+    );
+}
+
+fn direct_block_windows_from_bits(
+    nw_bits: u16,
+    n_bits: u16,
+    ne_bits: u16,
+    w_bits: u16,
+    center_bits: u16,
+    e_bits: u16,
+    sw_bits: u16,
+    s_bits: u16,
+    se_bits: u16,
+) BlockWindowSet {
+    const north_row = block_row_mask(n_bits, 3);
+    const south_row = block_row_mask(s_bits, 0);
+    const center_row_0 = block_row_mask(center_bits, 0);
+    const center_row_1 = block_row_mask(center_bits, 1);
+    const center_row_2 = block_row_mask(center_bits, 2);
+    const center_row_3 = block_row_mask(center_bits, 3);
+    const west_edge_bits = block_right_column_bits(w_bits);
+    const east_edge_bits = block_left_column_bits(e_bits);
+    const nw_corner: u1 = @intCast((nw_bits >> 15) & 1);
+    const ne_corner: u1 = @intCast((ne_bits >> 12) & 1);
+    const sw_corner: u1 = @intCast((sw_bits >> 3) & 1);
+    const se_corner: u1 = @intCast(se_bits & 1);
 
     return .{
         .nw = pack_window_rows(
@@ -966,6 +1075,34 @@ test "direct_block_windows extracts the bottom-right 4x4 block from center e s a
     const windows = direct_block_windows(neighborhood);
 
     try std.testing.expectEqual(@as(u16, 0xa5a5), windows.se);
+}
+
+test "infer_next_block_from_bits_initialized matches public and reference block helpers" {
+    init_runtime_luts();
+
+    const border_patterns = [_]u20{ 0, 0xfffff, 0x55555, 0xabcde };
+
+    for (representative_center_patterns) |center_bits| {
+        for (border_patterns) |border_bits| {
+            const neighborhood = neighborhood_from_center_and_border_bits(center_bits, border_bits);
+            const expected = infer_next_block_reference(neighborhood);
+            const public_next = infer_next_block_from_neighborhood(neighborhood);
+            const hot_next = infer_next_block_from_bits_initialized(
+                neighborhood.nw.bits,
+                neighborhood.n.bits,
+                neighborhood.ne.bits,
+                neighborhood.w.bits,
+                neighborhood.center.bits,
+                neighborhood.e.bits,
+                neighborhood.sw.bits,
+                neighborhood.s.bits,
+                neighborhood.se.bits,
+            );
+
+            try std.testing.expectEqual(expected.bits, public_next.bits);
+            try std.testing.expectEqual(expected.bits, hot_next.bits);
+        }
+    }
 }
 
 test "build_next_center_lut_runtime matches the direct 4x3x3 evaluator for every 4x4 block" {
