@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="768" height="768"
+     viewBox="-1 -1 33 33" role="img" aria-labelledby="title description">
+  <title id="title">Order-5 Hilbert curve</title>
+  <desc id="description">
+    An illustrative Hilbert traversal of all 1,024 blocks in a 32 by 32 block grid.
+    Each block represents 4 by 4 cells, giving a 128 by 128 cell grid in this example.
+  </desc>
+  <!-- Generated from src/modules/hilbert_curve.zig using write_curve with order 5. -->
+  <rect x="-1" y="-1" width="33" height="33" rx="0.4" fill="#ffffff"/>
+  <path fill="none" stroke="#0969da" stroke-width="0.16"
+        stroke-linecap="round" stroke-linejoin="round" d="
+    M0 31 v-1 h1 v1 h2 v-1 h-1 v-1 h1 v-1 h-2 v1 h-1 v-2 h1 v-1
+    h-1 v-2 h1 v1 h1 v-1 h1 v2 h-1 v1 h3 v-1 h-1 v-2 h1 v1
+    h1 v-1 h1 v2 h-1 v1 h1 v2 h-1 v-1 h-2 v1 h1 v1 h-1 v1
+    h2 v-1 h1 v1 h2 v-1 h-1 v-2 h1 v1 h1 v-1 h1 v2 h-1 v1
+    h2 v-1 h1 v1 h2 v-1 h-1 v-1 h1 v-1 h-2 v1 h-1 v-3 h1 v1
+    h2 v-1 h-1 v-1 h1 v-1 h-2 v1 h-1 v-1 h-2 v1 h1 v2 h-1 v-1
+    h-1 v1 h-1 v-2 h1 v-1 h-1 v-1 h1 v-1 h-1 v-2 h1 v1 h1 v-1
+    h1 v2 h-1 v1 h2 v-1 h1 v1 h2 v-1 h-1 v-1 h1 v-1 h-2 v1
+    h-1 v-3 h1 v1 h2 v-1 h-1 v-1 h1 v-1 h-2 v1 h-1 v-1 h-2 v1
+    h1 v2 h-1 v-1 h-1 v1 h-1 v-2 h1 v-1 h-2 v1 h-1 v-1 h-2 v1
+    h1 v1 h-1 v1 h2 v-1 h1 v2 h-1 v1 h1 v2 h-1 v-1 h-1 v1
+    h-1 v-2 h1 v-1 h-3 v1 h1 v2 h-1 v-1 h-1 v1 h-1 v-2 h1 v-1
+    h-1 v-2 h1 v1 h2 v-1 h-1 v-1 h1 v-1 h-2 v1 h-1 v-2 h1 v-1
+    h-1 v-2 h1 v1 h1 v-1 h1 v2 h-1 v1 h2 v-1 h1 v1 h2 v-1
+    h-1 v-1 h1 v-1 h-2 v1 h-1 v-3 h1 v1 h2 v-1 h-1 v-1 h1 v-1
+    h-2 v1 h-1 v-1 h-2 v1 h1 v2 h-1 v-1 h-1 v1 h-1 v-2 h1 v-1
+    h-1 v-2 h1 v1 h2 v-1 h-1 v-1 h1 v-1 h-2 v1 h-1 v-2 h1 v-1
+    h-1 v-2 h1 v1 h1 v-1 h1 v2 h-1 v1 h3 v-1 h-1 v-2 h1 v1
+    h1 v-1 h1 v2 h-1 v1 h1 v2 h-1 v-1 h-2 v1 h1 v1 h-1 v1
+    h2 v-1 h1 v1 h1 v-1 h1 v1 h2 v-1 h-1 v-1 h1 v-1 h-2 v1
+    h-1 v-2 h1 v-1 h-1 v-2 h1 v1 h1 v-1 h1 v2 h-1 v1 h3 v-1
+    h-1 v-2 h1 v1 h1 v-1 h1 v2 h-1 v1 h1 v2 h-1 v-1 h-2 v1
+    h1 v1 h-1 v1 h2 v-1 h1 v2 h-1 v1 h1 v2 h-1 v-1 h-1 v1
+    h-1 v-2 h1 v-1 h-2 v1 h-1 v-1 h-2 v1 h1 v1 h-1 v1 h2 v-1
+    h1 v3 h-1 v-1 h-2 v1 h1 v1 h-1 v1 h2 v-1 h1 v1 h2 v-1
+    h-1 v-2 h1 v1 h1 v-1 h1 v2 h-1 v1 h3 v-1 h-1 v-2 h1 v1
+    h1 v-1 h1 v2 h-1 v1 h2 v-1 h1 v1 h2 v-1 h-1 v-1 h1 v-1
+    h-2 v1 h-1 v-3 h1 v1 h2 v-1 h-1 v-1 h1 v-1 h-2 v1 h-1 v-1
+    h-2 v1 h1 v2 h-1 v-1 h-1 v1 h-1 v-2 h1 v-1 h-1 v-2 h1 v1
+    h2 v-1 h-1 v-1 h1 v-1 h-2 v1 h-1 v-2 h1 v-1 h-1 v-2 h1 v1
+    h1 v-1 h1 v2 h-1 v1 h3 v-1 h-1 v-2 h1 v1 h1 v-1 h1 v2
+    h-1 v1 h1 v2 h-1 v-1 h-2 v1 h1 v1 h-1 v1 h2 v-1 h1 v1
+    h1 v-1 h1 v1 h2 v-1 h-1 v-1 h1 v-1 h-2 v1 h-1 v-2 h1 v-1
+    h-1 v-2 h1 v1 h1 v-1 h1 v2 h-1 v1 h3 v-1 h-1 v-2 h1 v1
+    h1 v-1 h1 v2 h-1 v1 h1 v2 h-1 v-1 h-2 v1 h1 v1 h-1 v1
+    h2 v-1 h1 v2 h-1 v1 h1 v2 h-1 v-1 h-1 v1 h-1 v-2 h1 v-1
+    h-2 v1 h-1 v-1 h-2 v1 h1 v1 h-1 v1 h2 v-1 h1 v3 h-1 v-1
+    h-2 v1 h1 v1 h-1 v1 h2 v-1 h1 v1 h2 v-1 h-1 v-2 h1 v1
+    h1 v-1 h1 v2 h-1 v1 h1 v2 h-1 v-1 h-2 v1 h1 v1 h-1 v1
+    h2 v-1 h1 v2 h-1 v1 h1 v2 h-1 v-1 h-1 v1 h-1 v-2 h1 v-1
+    h-3 v1 h1 v2 h-1 v-1 h-1 v1 h-1 v-2 h1 v-1 h-1 v-2 h1 v1
+    h2 v-1 h-1 v-1 h1 v-1 h-2 v1 h-1 v-1 h-2 v1 h1 v2 h-1 v-1
+    h-1 v1 h-1 v-2 h1 v-1 h-2 v1 h-1 v-1 h-2 v1 h1 v1 h-1 v1
+    h2 v-1 h1 v3 h-1 v-1 h-2 v1 h1 v1 h-1 v1 h2 v-1 h1 v1
+    h2 v-1 h-1 v-2 h1 v1 h1 v-1 h1 v2 h-1 v1 h1 v1 h-1 v1
+    h1 v2 h-1 v-1 h-1 v1 h-1 v-2 h1 v-1 h-2 v1 h-1 v-1 h-2 v1
+    h1 v1 h-1 v1 h2 v-1 h1 v3 h-1 v-1 h-2 v1 h1 v1 h-1 v1
+    h2 v-1 h1 v1 h2 v-1 h-1 v-2 h1 v1 h1 v-1 h1 v2 h-1 v1
+    h2 v-1 h1 v1 h2 v-1 h-1 v-1 h1 v-1 h-2 v1 h-1 v-2 h1 v-1
+    h-1 v-2 h1 v1 h1 v-1 h1 v2 h-1 v1 h3 v-1 h-1 v-2 h1 v1
+    h1 v-1 h1 v2 h-1 v1 h1 v2 h-1 v-1 h-2 v1 h1 v1 h-1 v1
+    h2 v-1 h1 v1
+  "/>
+</svg>
